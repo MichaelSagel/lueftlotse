@@ -1,4 +1,4 @@
-﻿:host { display: block; }
+:host { display: block; }
 .dashboard { max-width: 440px; margin: 0 auto; padding: 40px 20px 24px; }
 header { margin-bottom: 28px; }
 .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #52675e; }
@@ -21,3 +21,5 @@ button:hover { background: #24563f; }
 button:focus-visible { outline: 3px solid #17663e; outline-offset: 4px; }
 footer { color: #52675e; font-size: 12px; line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) { .reading { transition: none; } }
+.history-link { background: white; display: block; text-align: center; padding: 14px; margin-bottom: 24px; border: 1px solid #163e2c; border-radius: 14px; color: #163e2c; text-decoration: none; font-weight: 600; }
+.history-link:focus-visible { outline: 3px solid #17663e; outline-offset: 3px; }

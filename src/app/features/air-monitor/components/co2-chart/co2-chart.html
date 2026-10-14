@@ -1,0 +1,79 @@
+﻿<section aria-labelledby="history-title">
+  <h2 id="history-title">CO₂-Verlauf</h2>
+  <p class="caption">{{ history.count() }} gespeicherte Messungen</p>
+  <p class="caption">Messwerte werden bis zu zwei Jahre gespeichert</p>
+  <div class="periods" aria-label="Zeitraum auswählen">
+    @for (period of periods; track period.value) {
+      <button type="button" (click)="choosePeriod(period.value)" [attr.aria-pressed]="history.period() === period.value">{{ period.label }}</button>
+    }
+  </div>
+  @if (history.period() === 'custom') {
+    <form (submit)="$event.preventDefault(); applyRange()" class="range-form">
+      <label>Beginn <input type="datetime-local" step="1" required [min]="minimumDate()" [max]="maximumDate()" [value]="startInput()" (input)="startInput.set($any($event.target).value)"></label>
+      <label>Ende <input type="datetime-local" step="1" required [min]="minimumDate()" [max]="maximumDate()" [value]="endInput()" (input)="endInput.set($any($event.target).value)"></label>
+      <button type="submit">Zeitraum anzeigen</button>
+    </form>
+  }
+  @if (history.validation(); as message) { <p class="error" role="alert">{{ message }}</p> }
+  <div class="navigation">
+    <button type="button" (click)="navigate(-1)" [disabled]="previousDisabled()" aria-label="Vorheriger Zeitraum">← Zurück</button>
+    <button type="button" (click)="now()">Jetzt</button>
+    <button type="button" (click)="navigate(1)" [disabled]="nextDisabled()" aria-label="Nächster Zeitraum">Weiter →</button>
+  </div>
+  <p class="caption interval">{{ fullTime(history.range().start) }}<br>bis {{ fullTime(history.range().end) }} · {{ history.live() ? 'Live' : 'Fester Zeitraum' }}</p>
+  @if (history.loading()) { <p class="caption" role="status">Verlauf wird geladen …</p> }
+  @if (history.error(); as error) { <p class="error" role="alert">{{ error }}</p> }
+  @if (chart(); as data) {
+    <svg viewBox="0 0 340 190" role="img" aria-labelledby="chart-title chart-description">
+      <title id="chart-title">CO₂-Verlauf in ppm</title>
+      <desc id="chart-description">{{ history.rangeCount() }} Messungen im ausgewählten Zeitraum. Minima und Maxima bleiben sichtbar. Pausen werden nicht verbunden.</desc>
+      <text x="48" y="16">ppm</text>
+      <text x="40" y="32" text-anchor="end">{{ data.max }}</text>
+      <text x="40" y="152" text-anchor="end">{{ data.min }}</text>
+      <path class="axis" d="M48 28 V148 H320" />
+      @for (segment of data.segments; track $index) { <polyline class="line" [attr.points]="segment" /> }
+      @for (point of data.points; track $index) {
+        <circle [attr.cx]="point.x" [attr.cy]="point.y" r="3"><title>{{ point.label }}</title></circle>
+      }
+      @if (data.singleTime) {
+        <text x="184" y="174" text-anchor="middle">{{ data.first }}</text>
+      } @else {
+        <text x="48" y="174">{{ data.first }}</text>
+        <text x="320" y="174" text-anchor="end">{{ data.last }}</text>
+      }
+    </svg>
+    <p class="caption">Messzeitraum: {{ fullTime(data.firstTime) }}@if (!data.singleTime) { bis {{ fullTime(data.lastTime) }} }</p>
+    <p class="caption">{{ history.rangeCount() }} Messungen im Zeitraum · {{ data.points.length }} Diagrammpunkte. Große Zeiträume werden mit Minima und Maxima verdichtet; Pausen bleiben unverbunden.</p>
+  } @else {
+    <p class="empty">Keine Messungen in diesem Zeitraum.</p>
+  }
+  <h3>Messwerte</h3>
+  <div class="table-toolbar" aria-label="Tabellennavigation">
+    <button type="button" (click)="history.changePage(-1)" [disabled]="history.pageNumber() === 1 || history.tableLoading()">Zurück</button>
+    <span>Seite {{ history.pageNumber() }}</span>
+    <button type="button" (click)="history.changePage(1)" [disabled]="!history.hasNextPage() || history.tableLoading()">Weiter</button>
+    <span class="table-count">{{ history.tableCount() }} Messungen im Zeitraum</span>
+    <label>Pro Seite
+      <select [value]="history.pageSize()" (change)="history.changePageSize(+$any($event.target).value)">
+        <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+      </select>
+    </label>
+  </div>
+  <p class="caption">Tabellenstand: {{ fullTime(history.tableRange().start) }} bis {{ fullTime(history.tableRange().end) }}</p>
+  @if (history.newMeasurements() && (!history.live() || history.pageNumber() > 1)) {
+    <button type="button" class="new-measurements" (click)="history.updateTable()" [disabled]="history.tableLoading()">Neue Messungen anzeigen</button>
+  }
+  @if (history.tableLoading()) { <p class="caption" role="status">Messungen werden geladen …</p> }
+  <div class="table-scroll">
+    <table>
+      <caption>Exakte Messwerte · Neueste zuerst</caption>
+      <thead><tr><th scope="col">Datum</th><th scope="col">Uhrzeit</th><th scope="col">CO₂ (ppm)</th></tr></thead>
+      <tbody>
+        @for (row of history.rows(); track $index) {
+          <tr><td>{{ date(row.time) }}</td><td>{{ time(row.time) }}</td><td>{{ row.ppm }}</td></tr>
+        } @empty { <tr><td colspan="3">Keine Messungen</td></tr> }
+      </tbody>
+    </table>
+  </div>
+  <button type="button" class="delete" (click)="deleteHistory()" [disabled]="history.loading() || history.clearing()">Verlauf löschen</button>
+</section>

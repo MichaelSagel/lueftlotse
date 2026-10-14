@@ -1,0 +1,32 @@
+:host { display: block; margin-bottom: 28px; }
+section { background: white; border: 1px solid #b7cbc1; border-radius: 20px; padding: 20px 12px; }
+h2 { margin: 0 8px 8px; font-size: 18px; }
+.caption, .empty { margin: 8px; color: #52675e; font-size: 12px; line-height: 1.6; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+text { fill: #52675e; font: 11px system-ui, sans-serif; }
+.axis { fill: none; stroke: #b7cbc1; }
+.line { fill: none; stroke: #17663e; stroke-width: 2; stroke-linejoin: round; }
+circle { fill: #17663e; }
+.delete { margin: 12px 8px 0; min-height: 44px; padding: 10px 16px; border: 1px solid #a52c2c; border-radius: 10px; color: #a52c2c; background: white; font: inherit; cursor: pointer; }
+.delete:disabled { opacity: .5; cursor: default; }
+.delete:focus-visible { outline: 3px solid #a52c2c; outline-offset: 3px; }
+.error { margin: 8px; color: #a52c2c; font-size: 13px; line-height: 1.5; }
+.periods, .navigation { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 8px; }
+button { min-height: 44px; padding: 8px 10px; border: 1px solid #b7cbc1; border-radius: 8px; background: white; color: #193629; font: inherit; font-size: 13px; cursor: pointer; }
+button[aria-pressed="true"] { background: #163e2c; color: white; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 3px solid #17663e; outline-offset: 2px; }
+.range-form { display: grid; gap: 12px; margin: 12px 8px; }
+label { display: grid; gap: 6px; font-size: 13px; }
+input { width: 100%; min-width: 0; min-height: 44px; font: inherit; padding: 6px; border: 1px solid #b7cbc1; border-radius: 6px; }
+.interval { font-variant-numeric: tabular-nums; }
+h3 { margin: 18px 8px 8px; font-size: 16px; }
+.table-scroll { overflow-x: auto; margin: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+caption { text-align: left; padding: 8px 0; color: #52675e; }
+th, td { padding: 8px 4px; border-bottom: 1px solid #e4f3e9; text-align: left; white-space: nowrap; }
+.table-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px; font-size: 13px; }
+.table-count { flex-basis: 100%; color: #52675e; }
+.table-toolbar label { display: flex; align-items: center; gap: 8px; }
+select { min-height: 44px; border: 1px solid #b7cbc1; border-radius: 8px; padding: 6px 10px; background: white; font: inherit; }
+.new-measurements { margin: 0 8px 8px; background: #163e2c; color: white; }

@@ -1,8 +1,8 @@
-﻿import { DestroyRef, inject, Injectable, signal } from '@angular/core';
+import { DestroyRef, inject, Injectable, signal } from '@angular/core';
 import { Subject } from 'rxjs';
 import { Co2Reading, Co2Source, Co2SourceState } from './co2-source';
 
-@Injectable({ providedIn: 'root' })
+@Injectable()
 export class Co2Simulator implements Co2Source {
   private readonly value = signal<Co2Reading>({ ppm: 650, time: Date.now() });
   private readonly sourceState = signal<Co2SourceState>({ status: 'stopped', session: 0 });

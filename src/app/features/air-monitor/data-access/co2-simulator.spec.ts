@@ -1,17 +1,11 @@
-﻿import { TestBed } from '@angular/core/testing';
+import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Co2Simulator } from './co2-simulator';
-import { co2Status } from './co2-status';
+import { co2Status } from '../domain/co2-status';
 
  describe('Co2Simulator', () => {
-  beforeEach(() => { vi.useFakeTimers(); TestBed.configureTestingModule({}); });
+  beforeEach(() => { vi.useFakeTimers(); TestBed.configureTestingModule({ providers: [Co2Simulator] }); });
   afterEach(() => { TestBed.resetTestingModule(); vi.useRealTimers(); });
-
-  it.each([[999, 'green'], [1000, 'yellow'], [1999, 'yellow'], [2000, 'red']])(
-    'classifies %i ppm as %s', (ppm, color) => {
-      expect(co2Status(Number(ppm)).color).toBe(color);
-    },
-  );
 
   it('changes smoothly through all demo statuses without duplicate timers', () => {
     const simulator = TestBed.inject(Co2Simulator);
