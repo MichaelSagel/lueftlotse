@@ -1,46 +1,37 @@
-﻿import { computed, DestroyRef, inject, Injectable, signal } from '@angular/core';
-
-import { Co2History } from './co2-history';
-
-export function co2Status(ppm: number) {
-  if (ppm < 1000) return { color: 'green', label: 'Niedriger CO₂-Wert', hint: 'Unter der ersten Demo-Schwelle.' };
-  if (ppm < 2000) return { color: 'yellow', label: 'Erhöhter CO₂-Wert', hint: 'Zwischen den beiden Demo-Schwellen.' };
-  return { color: 'red', label: 'Hoher CO₂-Wert', hint: 'Ab der zweiten Demo-Schwelle.' };
-}
+﻿import { DestroyRef, inject, Injectable, signal } from '@angular/core';
+import { Subject } from 'rxjs';
+import { Co2Reading, Co2Source, Co2SourceState } from './co2-source';
 
 @Injectable({ providedIn: 'root' })
-export class Co2Simulator {
-  private readonly history = inject(Co2History);
-  private readonly value = signal(650);
-  private readonly active = signal(false);
+export class Co2Simulator implements Co2Source {
+  private readonly value = signal<Co2Reading>({ ppm: 650, time: Date.now() });
+  private readonly sourceState = signal<Co2SourceState>({ status: 'stopped', session: 0 });
+  private readonly updates = new Subject<Co2Reading>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private phase = 0;
-  readonly ppm = this.value.asReadonly();
-  readonly running = this.active.asReadonly();
-  readonly status = computed(() => co2Status(this.ppm()));
+  readonly current = this.value.asReadonly();
+  readonly state = this.sourceState.asReadonly();
+  readonly readings = this.updates.asObservable();
 
-  constructor() { inject(DestroyRef).onDestroy(() => this.stop()); }
+  constructor() {
+    inject(DestroyRef).onDestroy(() => { this.stop(); this.updates.complete(); });
+  }
 
   start(): void {
     if (this.timer !== undefined) return;
-    this.history.beginSegment();
-    this.active.set(true);
+    this.sourceState.set({ status: 'running', session: this.state().session + 1 });
     // Smooth two-minute cycle between 650 and 2350 ppm.
     this.timer = setInterval(() => {
       this.phase += Math.PI / 60;
-      this.value.set(Math.round(1500 - 850 * Math.cos(this.phase)));
-      this.history.record(this.value());
+      const reading = { ppm: Math.round(1500 - 850 * Math.cos(this.phase)), time: Date.now() };
+      this.value.set(reading);
+      this.updates.next(reading);
     }, 1000);
   }
 
   stop(): void {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
-    this.active.set(false);
-  }
-
-  toggle(): void {
-    if (this.running()) this.stop();
-    else this.start();
+    this.sourceState.set({ ...this.state(), status: 'stopped' });
   }
 }

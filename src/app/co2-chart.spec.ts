@@ -1,9 +1,11 @@
+﻿import { CO2_SOURCE } from './co2-source';
+import { appConfig } from './app.config';
 import { TestBed } from '@angular/core/testing';
 import { Co2Chart } from './co2-chart';
 import { Co2History } from './co2-history';
 
 describe('Co2Chart', () => {
-  beforeEach(() => TestBed.configureTestingModule({ imports: [Co2Chart] }));
+  beforeEach(() => TestBed.configureTestingModule({ providers: appConfig.providers, imports: [Co2Chart] }));
 
   it('shows guidance for an empty history', () => {
     const fixture = TestBed.createComponent(Co2Chart);

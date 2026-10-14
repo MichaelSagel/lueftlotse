@@ -1,6 +1,7 @@
 ﻿import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Co2Simulator, co2Status } from './co2-simulator';
+import { Co2Simulator } from './co2-simulator';
+import { co2Status } from './co2-status';
 
  describe('Co2Simulator', () => {
   beforeEach(() => { vi.useFakeTimers(); TestBed.configureTestingModule({}); });
@@ -17,15 +18,15 @@ import { Co2Simulator, co2Status } from './co2-simulator';
     simulator.start();
     simulator.start();
     expect(vi.getTimerCount()).toBe(1);
-    let previous = simulator.ppm();
+    let previous = simulator.current().ppm;
     const colors = new Set<string>();
     for (let second = 0; second < 120; second++) {
       vi.advanceTimersByTime(1000);
-      expect(Math.abs(simulator.ppm() - previous)).toBeLessThanOrEqual(45);
-      expect(simulator.ppm()).toBeGreaterThanOrEqual(650);
-      expect(simulator.ppm()).toBeLessThanOrEqual(2350);
-      colors.add(simulator.status().color);
-      previous = simulator.ppm();
+      expect(Math.abs(simulator.current().ppm - previous)).toBeLessThanOrEqual(45);
+      expect(simulator.current().ppm).toBeGreaterThanOrEqual(650);
+      expect(simulator.current().ppm).toBeLessThanOrEqual(2350);
+      colors.add(co2Status(simulator.current().ppm).color);
+      previous = simulator.current().ppm;
     }
     expect(colors).toEqual(new Set(['green', 'yellow', 'red']));
   });
@@ -35,14 +36,14 @@ import { Co2Simulator, co2Status } from './co2-simulator';
     simulator.start();
     vi.advanceTimersByTime(20000);
     simulator.stop();
-    const paused = simulator.ppm();
+    const paused = simulator.current().ppm;
     vi.advanceTimersByTime(10000);
-    expect(simulator.ppm()).toBe(paused);
-    expect(simulator.running()).toBe(false);
+    expect(simulator.current().ppm).toBe(paused);
+    expect((simulator.state().status === 'running')).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     simulator.start();
     vi.advanceTimersByTime(1000);
-    expect(simulator.ppm()).toBeGreaterThan(paused);
+    expect(simulator.current().ppm).toBeGreaterThan(paused);
   });
 
   it('clears its timer when the injector is destroyed', () => {
@@ -50,6 +51,6 @@ import { Co2Simulator, co2Status } from './co2-simulator';
     simulator.start();
     TestBed.resetTestingModule();
     expect(vi.getTimerCount()).toBe(0);
-    expect(simulator.running()).toBe(false);
+    expect((simulator.state().status === 'running')).toBe(false);
   });
 });

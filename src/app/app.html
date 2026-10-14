@@ -4,15 +4,15 @@
     <h1>Lüftlotse</h1>
     <span class="badge">Simulator</span>
   </header>
-  <section [class]="'reading ' + simulator.status().color" aria-labelledby="co2-label">
+  <section [class]="'reading ' + status().color" aria-labelledby="co2-label">
     <h2 id="co2-label">CO₂-Konzentration</h2>
-    <p class="measurement"><strong>{{ simulator.ppm() }}</strong><span>ppm</span></p>
-    <p class="status"><span class="dot" aria-hidden="true"></span>{{ simulator.status().label }}</p>
-    <p class="hint">{{ simulator.status().hint }}</p>
+    <p class="measurement"><strong>{{ source.current()?.ppm ?? '—' }}</strong><span>ppm</span></p>
+    <p class="status"><span class="dot" aria-hidden="true"></span>{{ status().label }}</p>
+    <p class="hint">{{ status().hint }}</p>
   </section>
   <div class="controls">
-    <p role="status">{{ simulator.running() ? 'Simulation läuft' : 'Simulation pausiert' }}</p>
-    <button type="button" (click)="simulator.toggle()">{{ simulator.running() ? 'Simulation stoppen' : 'Simulation starten' }}</button>
+    <p role="status">{{ source.state().status === 'running' ? 'Simulation läuft' : 'Simulation pausiert' }}</p>
+    <button type="button" (click)="toggle()">{{ source.state().status === 'running' ? 'Simulation stoppen' : 'Simulation starten' }}</button>
   </div>
   <app-co2-chart />
   <footer>

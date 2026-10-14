@@ -1,10 +1,12 @@
-﻿import { TestBed } from '@angular/core/testing';
+﻿import { CO2_SOURCE } from './co2-source';
+import { appConfig } from './app.config';
+import { TestBed } from '@angular/core/testing';
 import { App } from './app';
 import { Co2Simulator } from './co2-simulator';
 
  describe('App', () => {
   beforeEach(async () => {
-    await TestBed.configureTestingModule({ imports: [App] }).compileComponents();
+    await TestBed.configureTestingModule({ providers: appConfig.providers, imports: [App] }).compileComponents();
   });
 
   it('renders the German simulator screen with its initial reading', () => {
@@ -22,14 +24,14 @@ import { Co2Simulator } from './co2-simulator';
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
     const button = (fixture.nativeElement as HTMLElement).querySelector('button')!;
-    const simulator = TestBed.inject(Co2Simulator);
+    const simulator = TestBed.inject(CO2_SOURCE);
     button.click();
     fixture.detectChanges();
-    expect(simulator.running()).toBe(true);
+    expect((simulator.state().status === 'running')).toBe(true);
     expect(button.textContent).toContain('Simulation stoppen');
     button.click();
     fixture.detectChanges();
-    expect(simulator.running()).toBe(false);
+    expect((simulator.state().status === 'running')).toBe(false);
     expect(button.textContent).toContain('Simulation starten');
   });
 });
