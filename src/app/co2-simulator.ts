@@ -1,5 +1,7 @@
 ﻿import { computed, DestroyRef, inject, Injectable, signal } from '@angular/core';
 
+import { Co2History } from './co2-history';
+
 export function co2Status(ppm: number) {
   if (ppm < 1000) return { color: 'green', label: 'Niedriger CO₂-Wert', hint: 'Unter der ersten Demo-Schwelle.' };
   if (ppm < 2000) return { color: 'yellow', label: 'Erhöhter CO₂-Wert', hint: 'Zwischen den beiden Demo-Schwellen.' };
@@ -8,6 +10,7 @@ export function co2Status(ppm: number) {
 
 @Injectable({ providedIn: 'root' })
 export class Co2Simulator {
+  private readonly history = inject(Co2History);
   private readonly value = signal(650);
   private readonly active = signal(false);
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -20,11 +23,13 @@ export class Co2Simulator {
 
   start(): void {
     if (this.timer !== undefined) return;
+    this.history.beginSegment();
     this.active.set(true);
     // Smooth two-minute cycle between 650 and 2350 ppm.
     this.timer = setInterval(() => {
       this.phase += Math.PI / 60;
       this.value.set(Math.round(1500 - 850 * Math.cos(this.phase)));
+      this.history.record(this.value());
     }, 1000);
   }
 

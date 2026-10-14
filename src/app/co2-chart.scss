@@ -1,0 +1,9 @@
+:host { display: block; margin-bottom: 28px; }
+section { background: white; border: 1px solid #b7cbc1; border-radius: 20px; padding: 20px 12px; }
+h2 { margin: 0 8px 8px; font-size: 18px; }
+.caption, .empty { margin: 8px; color: #52675e; font-size: 12px; line-height: 1.6; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+text { fill: #52675e; font: 11px system-ui, sans-serif; }
+.axis { fill: none; stroke: #b7cbc1; }
+.line { fill: none; stroke: #17663e; stroke-width: 2; stroke-linejoin: round; }
+circle { fill: #17663e; }
