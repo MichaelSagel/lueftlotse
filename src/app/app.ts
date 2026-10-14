@@ -1,12 +1,7 @@
-import { Component, signal } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+﻿import { Component, inject } from '@angular/core';
+import { Co2Simulator } from './co2-simulator';
 
-@Component({
-  imports: [RouterOutlet],
-  selector: 'app-root',
-  styleUrl: './app.scss',
-  templateUrl: './app.html',
-})
+@Component({ selector: 'app-root', styleUrl: './app.scss', templateUrl: './app.html' })
 export class App {
-  protected readonly title = signal('mobile');
+  protected readonly simulator = inject(Co2Simulator);
 }
