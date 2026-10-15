@@ -1,11 +1,14 @@
 ﻿import { vi } from 'vitest';
 import { Co2Measurement, Co2Storage, PageCursor } from './co2-storage';
+import { signal } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
 
 export function testStorage(seed: Co2Measurement[] = []) {
   const rows = [...seed];
   const sorted = (start: number, end: number) => rows.map((row, key) => ({ row, key: key + 1 })).filter(({ row }) => row.time >= start && row.time <= end).sort((a, b) => a.row.time - b.row.time || a.key - b.key);
   const storage = {
+    changes: signal(0),
+    syncSnapshot: vi.fn(async () => ({ pending: rows.length, synced: 0, maxKey: rows.length })),
     migrateMetadata: vi.fn(async () => {}),
     count: vi.fn(async () => rows.length),
     load: vi.fn(async (start: number, end: number) => {

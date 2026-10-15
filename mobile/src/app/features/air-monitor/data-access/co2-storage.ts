@@ -1,5 +1,6 @@
 ﻿import { Injectable } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
+import { signal } from '@angular/core';
 
 export interface Co2Measurement { readonly time: number; readonly ppm: number; readonly segment: string; }
 /** History projections can still be read while legacy rows are being upgraded. */
@@ -10,19 +11,22 @@ export interface StoredCo2Measurement extends Co2Measurement {
   readonly syncStatus: 'pending' | 'synced';
 }
 interface MetadataProgress { lastKey: number; complete: boolean; }
+export interface PendingMeasurement { key: number; measurement: StoredCo2Measurement; }
+export interface SyncSnapshot { pending: number; synced: number; maxKey: number; }
 export interface PageCursor { readonly time: number; readonly key: number; }
 export interface MeasurementPage { entries: Co2Measurement[]; next: PageCursor | null; }
 export interface TableSnapshot { count: number; maxKey: number; }
 
 @Injectable()
 export class Co2Storage {
+  readonly changes = signal(0);
   private database: Promise<IDBDatabase> | undefined;
   private migration: Promise<void> | undefined;
   private generation = 0;
   private open(): Promise<IDBDatabase> {
     if (!this.database) {
       this.database = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('lueftlotse', 2);
+        const request = indexedDB.open('lueftlotse', 3);
         let blocked = false;
         request.onupgradeneeded = event => {
           if (event.oldVersion < 1) {
@@ -31,6 +35,7 @@ export class Co2Storage {
           }
           // Keep versionchange short: the history is backfilled in resumable transactions.
           if (event.oldVersion < 2) request.result.createObjectStore('metadata');
+          if (event.oldVersion < 3) request.transaction!.objectStore('measurements').createIndex('syncStatus', 'syncStatus');
         };
         request.onsuccess = () => {
           if (blocked) { request.result.close(); return; }
@@ -49,7 +54,7 @@ export class Co2Storage {
     const database = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = database.transaction('measurements', 'readwrite');
-      transaction.oncomplete = () => resolve((request ? request.result : undefined) as T);
+      transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve((request ? request.result : undefined) as T); };
       transaction.onabort = () => reject(transaction.error ?? new Error('Transaktion abgebrochen'));
       const request = execute(transaction.objectStore('measurements'));
     });
@@ -130,7 +135,7 @@ export class Co2Storage {
     return new Promise((resolve, reject) => {
       const transaction = database.transaction(['measurements', 'metadata'], 'readwrite');
       let request: IDBRequest<IDBValidKey>;
-      transaction.oncomplete = () => resolve(Number(request.result));
+      transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve(Number(request.result)); };
       transaction.onabort = () => reject(transaction.error ?? new Error('Messung konnte nicht gespeichert werden'));
       this.withSimulatorId(transaction.objectStore('metadata'), deviceId => {
         const measurement: StoredCo2Measurement = {
@@ -164,7 +169,7 @@ export class Co2Storage {
       const metadata = transaction.objectStore('metadata');
       const store = transaction.objectStore('measurements');
       let complete = false;
-      transaction.oncomplete = () => resolve(complete);
+      transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve(complete); };
       transaction.onabort = () => reject(transaction.error ?? new Error('Metadaten konnten nicht gespeichert werden'));
       this.withSimulatorId(metadata, deviceId => {
         const checkpoint = metadata.get('measurementMetadataProgress');
@@ -206,6 +211,58 @@ export class Co2Storage {
       if (request.result === undefined) metadata.put(deviceId, 'simulatorDeviceId');
       use(deviceId);
     };
+  }
+  async syncSnapshot(): Promise<SyncSnapshot> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction('measurements', 'readonly');
+      const store = transaction.objectStore('measurements');
+      const count = store.count();
+      const synced = store.index('syncStatus').count('synced');
+      const last = store.openKeyCursor(null, 'prev');
+      transaction.oncomplete = () => resolve({ pending: count.result - synced.result, synced: synced.result, maxKey: Number(last.result?.primaryKey ?? 0) });
+      transaction.onabort = () => reject(transaction.error ?? new Error('Synchronisierungsstand konnte nicht geladen werden'));
+    });
+  }
+  async pendingPage(afterKey: number, maxKey: number): Promise<PendingMeasurement[]> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction('measurements', 'readonly');
+      const request = transaction.objectStore('measurements').index('syncStatus').openCursor(IDBKeyRange.only('pending'));
+      const entries: PendingMeasurement[] = [];
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || Number(cursor.primaryKey) > maxKey || entries.length === 100) return;
+        const key = Number(cursor.primaryKey);
+        if (key <= afterKey) { cursor.continuePrimaryKey('pending', afterKey + 1); return; }
+        const row = cursor.value as Partial<StoredCo2Measurement>;
+        if (row.measurementId && row.deviceId && (row.source === 'simulator' || row.source === 'sensor') &&
+            typeof row.time === 'number' && typeof row.ppm === 'number' && typeof row.segment === 'string') {
+          entries.push({ key, measurement: row as StoredCo2Measurement });
+        }
+        cursor.continue();
+      };
+      transaction.oncomplete = () => resolve(entries);
+      transaction.onabort = () => reject(transaction.error ?? new Error('Ausstehende Messungen konnten nicht geladen werden'));
+    });
+  }
+  /** Acknowledge only this exact snapshot; never recreate rows deleted during HTTP. */
+  async markSynced(entries: readonly PendingMeasurement[]): Promise<void> {
+    if (entries.length > 100) throw new RangeError('Invalid acknowledgement size');
+    await this.write(store => {
+      for (const entry of entries) {
+        const request = store.get(entry.key);
+        request.onsuccess = () => {
+          const current = request.result as StoredCo2Measurement | undefined;
+          const sent = entry.measurement;
+          if (current?.syncStatus === 'pending' && current.measurementId === sent.measurementId &&
+              current.deviceId === sent.deviceId && current.source === sent.source && current.time === sent.time &&
+              current.ppm === sent.ppm && current.segment === sent.segment) {
+            store.put({ ...current, syncStatus: 'synced' } satisfies StoredCo2Measurement, entry.key);
+          }
+        };
+      }
+    });
   }
   clear(): Promise<void> { return this.write(store => { store.clear(); }); }
   /** Strict upper bound keeps measurements exactly at the retention boundary. */

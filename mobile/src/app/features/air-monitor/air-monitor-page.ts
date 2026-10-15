@@ -4,8 +4,9 @@ import { co2Status } from './domain/co2-status';
 import { Co2Chart } from './components/co2-chart/co2-chart';
 import { Co2History } from './data-access/co2-history';
 import { DeviceDiscovery } from './components/device-discovery/device-discovery';
+import { Synchronization } from './components/synchronization/synchronization';
 
-@Component({ selector: 'app-air-monitor-page', imports: [Co2Chart, DeviceDiscovery], styleUrl: './air-monitor-page.scss', templateUrl: './air-monitor-page.html' })
+@Component({ selector: 'app-air-monitor-page', imports: [Co2Chart, DeviceDiscovery, Synchronization], styleUrl: './air-monitor-page.scss', templateUrl: './air-monitor-page.html' })
 export class AirMonitorPage {
   protected readonly source = inject(CO2_SOURCE);
   protected readonly history = inject(Co2History);
