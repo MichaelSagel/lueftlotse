@@ -18,8 +18,13 @@ function databaseHarness(points: Co2Measurement[] = []) {
     openKeyCursor: vi.fn(() => ({ result: { primaryKey: points.length } })),
     index: vi.fn(() => ({ count: vi.fn(() => ({ result: points.length })), openCursor })),
   };
+  const metadata = { get: vi.fn(() => {
+    const request = { result: 'simulator-id', onsuccess: null as null | (() => void) };
+    queueMicrotask(() => request.onsuccess?.());
+    return request;
+  }) };
   const transaction = {
-    objectStore: vi.fn(() => store), error: null as DOMException | null,
+    objectStore: vi.fn((name: string) => name === 'metadata' ? metadata : store), error: null as DOMException | null,
     oncomplete: null as null | (() => void), onabort: null as null | (() => void),
   };
   const database = { transaction: vi.fn(() => transaction), close: vi.fn(), onversionchange: null };

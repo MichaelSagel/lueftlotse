@@ -15,6 +15,24 @@ import { retentionStart } from '../domain/history-range';
   });
   afterEach(() => { TestBed.resetTestingModule(); vi.useRealTimers(); });
 
+  it('starts the resumable metadata migration independently of normal history restoration', async () => {
+    store.storage.migrateMetadata.mockImplementation(() => new Promise<void>(() => {}));
+    const history = openHistory();
+    await history.whenSettled();
+    expect(store.storage.migrateMetadata).toHaveBeenCalledOnce();
+    await history.record(850);
+    expect(history.count()).toBe(1);
+  });
+
+  it('reports a metadata migration failure without clearing history', async () => {
+    store.rows.push({ time: Date.now(), ppm: 650, segment: 'old' });
+    store.storage.migrateMetadata.mockRejectedValueOnce(new DOMException('full', 'QuotaExceededError'));
+    const history = openHistory(); await history.whenSettled();
+    expect(history.error()).toContain('Speicher voll');
+    expect(history.count()).toBe(1);
+    expect(store.storage.clear).not.toHaveBeenCalled();
+  });
+
   it('saves all readings, loads the selected window and preserves its graph while stopped', async () => {
     const history = openHistory(); const now = Date.now();
     for (let i = 0; i < 400; i++) await history.record(650 + i, now - (399 - i) * 1000);

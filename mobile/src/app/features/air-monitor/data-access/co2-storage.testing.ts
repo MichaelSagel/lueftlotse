@@ -6,6 +6,7 @@ export function testStorage(seed: Co2Measurement[] = []) {
   const rows = [...seed];
   const sorted = (start: number, end: number) => rows.map((row, key) => ({ row, key: key + 1 })).filter(({ row }) => row.time >= start && row.time <= end).sort((a, b) => a.row.time - b.row.time || a.key - b.key);
   const storage = {
+    migrateMetadata: vi.fn(async () => {}),
     count: vi.fn(async () => rows.length),
     load: vi.fn(async (start: number, end: number) => {
       const selected = sorted(start, end);

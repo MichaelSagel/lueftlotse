@@ -49,6 +49,7 @@ export class Co2History {
   private readonly reads = new Set<Promise<void>>();
 
   constructor() {
+    void this.storage.migrateMetadata().catch(error => this.reportError(error));
     void this.enqueue(async () => {
       await this.storage.prune(retentionStart(Date.now()));
       this.count.set(await this.storage.count()); this.restored = true;
