@@ -119,7 +119,8 @@ describe('Co2Chart', () => {
     await history.whenSettled();
     const fixture = TestBed.createComponent(Co2Chart); fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;
-    Array.from(element.querySelectorAll<HTMLButtonElement>('.periods button')).find(button => button.textContent === 'Zeitraum')!.click();
+    const period = element.querySelector<HTMLSelectElement>('.periods select')!;
+    period.value = 'custom'; period.dispatchEvent(new Event('change'));
     fixture.detectChanges();
     const inputs = element.querySelectorAll<HTMLInputElement>('input');
     const formatted = (time: number) => {
@@ -137,6 +138,37 @@ describe('Co2Chart', () => {
     inputs[0].value = ''; inputs[0].dispatchEvent(new Event('input'));
     element.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
     fixture.detectChanges(); expect(element.querySelector('[role="alert"]')?.textContent).toContain('gültigen Zeitraum');
+  });
+
+
+  it('applies local date drafts only on submit, with inclusive boundaries shared by chart, table and count', async () => {
+    const history = TestBed.inject(Co2History);
+    const end = new Date(); end.setHours(0,0,0,0); end.setDate(end.getDate()-1);
+    const start = new Date(end); start.setDate(start.getDate()-2);
+    for (const [offset,ppm] of [[-1,501],[0,601],[1,701]] as const) await history.record(ppm,start.getTime()+offset);
+    await history.record(801,end.getTime()); await history.record(901,end.getTime()+1);
+    await history.refresh(); await history.whenSettled();
+    const fixture = TestBed.createComponent(Co2Chart); fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const select = el.querySelector<HTMLSelectElement>('.periods select')!;
+    expect(Array.from(select.options, o=>o.text)).toEqual(['5 Min.','1 Std.','24 Std.','1 Woche','1 Monat','1 Jahr','2 Jahre','Benutzerdefiniert']);
+    const before = history.range(); const rows = history.rows();
+    select.value='custom'; select.dispatchEvent(new Event('change')); fixture.detectChanges();
+    const inputs=el.querySelectorAll<HTMLInputElement>('input');
+    const local=(d: Date)=> new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,19);
+    inputs[0].value=local(start); inputs[0].dispatchEvent(new Event('input'));
+    inputs[1].value=local(end); inputs[1].dispatchEvent(new Event('input'));
+    await history.whenSettled(); expect(history.range()).toBe(before); expect(history.rows()).toBe(rows);
+    el.querySelector('form')!.dispatchEvent(new Event('submit',{cancelable:true}));
+    await history.whenSettled(); fixture.detectChanges();
+    expect(history.range()).toEqual({start:start.getTime(),end:end.getTime()});
+    expect(history.tableRange()).toEqual(history.range());
+    expect(history.rangeCount()).toBe(3); expect(history.tableCount()).toBe(3);
+    expect(history.rows().map(r=>r.ppm)).toEqual([801,701,601]);
+    expect(history.measurements().map(r=>r.ppm)).toEqual([601,701,801]);
+    expect(el.querySelectorAll('svg tspan')).toHaveLength(2);
+    expect(el.textContent).toContain('Ausgewählter Zeitraum'); expect(el.textContent).toContain('Vorhandene Messwerte');
+    expect(new Date(history.range().start).toISOString()).toBe(start.toISOString());
   });
 
   it('renders compact pagination, second precision and an explicit refresh button', async () => {
@@ -159,7 +191,7 @@ describe('Co2Chart', () => {
     await history.whenSettled(); fixture.detectChanges();
     expect(toolbar.textContent).toContain('Seite 1');
     expect(element.querySelector('tbody tr td:last-child')?.textContent).toBe('900');
-    const size = element.querySelector<HTMLSelectElement>('select')!;
+    const size = element.querySelector<HTMLSelectElement>('.table-toolbar select')!;
     size.value = '25'; size.dispatchEvent(new Event('change'));
     await history.whenSettled(); fixture.detectChanges();
     expect(element.querySelectorAll('tbody tr')).toHaveLength(25);

@@ -17,7 +17,9 @@ export class Co2Chart {
   protected maximumDate(): string { return localInput(Date.now()); }
   protected readonly periods: { value: HistoryPeriod; label: string }[] = [
     { value: '5m', label: '5 Min.' }, { value: '1h', label: '1 Std.' },
-    { value: '24h', label: '24 Std.' }, { value: 'custom', label: 'Zeitraum' },
+    { value: '24h', label: '24 Std.' }, { value: '1w', label: '1 Woche' },
+    { value: '1mo', label: '1 Monat' }, { value: '1y', label: '1 Jahr' },
+    { value: '2y', label: '2 Jahre' }, { value: 'custom', label: 'Benutzerdefiniert' },
   ];
   private readonly dateFormatter = new Intl.DateTimeFormat('de-DE', { year: 'numeric', month: '2-digit', day: '2-digit' });
   private readonly timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -63,6 +65,7 @@ export class Co2Chart {
       else segments[segments.length - 1] += ` ${coordinate}`;
     });
     return { points, segments, min, max, first: this.time(firstTime), last: this.time(lastTime),
+      multiDay: this.date(firstTime) !== this.date(lastTime), firstDate: this.date(firstTime), lastDate: this.date(lastTime),
       firstTime, lastTime, singleTime: firstTime === lastTime };
   });
 }

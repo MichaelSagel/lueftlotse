@@ -1,11 +1,10 @@
 ﻿import { DestroyRef, inject, Injectable, signal } from '@angular/core';
 import { CO2_SOURCE } from './co2-source';
 import { Co2Measurement, Co2Storage, PageCursor } from './co2-storage';
-import { HistoryRange, retentionStart, validRange } from '../domain/history-range';
+import { HistoryPeriod, HistoryRange, periodStart, retentionStart, validRange } from '../domain/history-range';
 
 export type { Co2Measurement } from './co2-storage';
-export type HistoryPeriod = '5m' | '1h' | '24h' | 'custom';
-const durations = { '5m': 300000, '1h': 3600000, '24h': 86400000 };
+export type { HistoryPeriod } from '../domain/history-range';
 
 @Injectable()
 export class Co2History {
@@ -20,6 +19,7 @@ export class Co2History {
   readonly loading = signal(false);
   readonly clearing = signal(false);
   readonly period = signal<HistoryPeriod>('5m');
+  private appliedPeriod: HistoryPeriod = '5m';
   readonly live = signal(true);
   readonly range = signal<HistoryRange>({ start: Date.now() - 300000, end: Date.now() });
   readonly rows = signal<readonly Co2Measurement[]>([]);
@@ -139,7 +139,7 @@ export class Co2History {
     if (this.destroyed) return Promise.resolve();
     if (this.live()) {
       const end = Date.now();
-      this.range.set({ start: Math.max(retentionStart(end), end - (this.range().end - this.range().start)), end });
+      this.range.set({ start: Math.max(retentionStart(end), this.liveStart(end)), end });
     }
     const range = this.range();
     const revision = ++this.revision;
@@ -182,16 +182,17 @@ export class Co2History {
   choosePeriod(period: HistoryPeriod): void {
     this.period.set(period);
     if (period !== 'custom') {
+      this.appliedPeriod = period;
       this.live.set(true);
-      const end = Date.now(); this.setRange({ start: end - durations[period], end });
-    } else { this.live.set(false); this.latestRelevantKey = 0; void this.updateTable(); }
+      const end = Date.now(); this.setRange({ start: periodStart(end, period), end });
+    }
   }
   selectRange(start: number, end: number): boolean {
     if (!validRange({ start, end }, Date.now())) {
       this.validation.set('Bitte wähle einen gültigen Zeitraum innerhalb der letzten zwei Jahre. Beginn muss vor Ende liegen; Ende darf nicht in der Zukunft liegen.');
       return false;
     }
-    this.period.set('custom'); this.live.set(false); this.setRange({ start, end }); return true;
+    this.appliedPeriod = 'custom'; this.period.set('custom'); this.live.set(false); this.setRange({ start, end }); return true;
   }
   navigate(direction: -1 | 1): void {
     const { start, end } = this.range(); const width = end - start;
@@ -200,8 +201,12 @@ export class Co2History {
     this.live.set(false); this.setRange({ start: Math.max(earliest, shiftedEnd - width), end: shiftedEnd });
   }
   now(): void {
-    const end = Date.now(); const width = this.range().end - this.range().start;
-    this.live.set(true); this.setRange({ start: Math.max(retentionStart(end), end - width), end });
+    const end = Date.now();
+    this.live.set(true); this.setRange({ start: Math.max(retentionStart(end), this.liveStart(end)), end });
+  }
+  private liveStart(end: number): number {
+    const period = this.appliedPeriod;
+    return period === 'custom' ? end - (this.range().end - this.range().start) : periodStart(end, period);
   }
   changePage(direction: -1 | 1): void {
     if (this.tableLoading()) return;
@@ -235,7 +240,7 @@ export class Co2History {
     if (this.destroyed) return Promise.resolve();
     const current = this.range();
     const end = this.live() ? Date.now() : current.end;
-    const range = { start: this.live() ? end - (current.end - current.start) : current.start, end };
+    const range = { start: this.live() ? Math.max(retentionStart(end), this.liveStart(end)) : current.start, end };
     const revision = ++this.tableRevision; const size = this.pageSize();
     if (!background) {
       this.tableRange.set(range); this.pageStarts = [null]; this.pageNumber.set(1);

@@ -4,7 +4,7 @@ import { routes } from '../../../app.routes';
 import { CO2_SOURCE } from './co2-source';
 import { Co2History } from './co2-history';
 import { testStorage } from './co2-storage.testing';
-import { retentionStart } from '../domain/history-range';
+import { periodStart, retentionStart } from '../domain/history-range';
 
  describe('Persistent CO₂ history', () => {
   let store: ReturnType<typeof testStorage>;
@@ -14,6 +14,22 @@ import { retentionStart } from '../domain/history-range';
     TestBed.configureTestingModule({ providers: [...routes[0].providers!, store.provider] });
   });
   afterEach(() => { TestBed.resetTestingModule(); vi.useRealTimers(); });
+
+
+  it.each(['5m','1h','24h','1w','1mo','1y','2y'] as const)('uses the same applied quick range for graph and table: %s', async period => {
+    vi.setSystemTime(new Date(2026,2,31,12,0,0));
+    const history = openHistory(); await history.whenSettled();
+    history.choosePeriod(period); await history.whenSettled();
+    expect(history.range()).toEqual({start:periodStart(Date.now(),period),end:Date.now()});
+    expect(history.tableRange()).toEqual(history.range()); expect(history.pageNumber()).toBe(1);
+    const range = history.range();
+    history.choosePeriod('custom'); await history.whenSettled();
+    expect(history.range()).toBe(range);
+    vi.setSystemTime(new Date(2026,3,1,12,0,0));
+    await history.refresh(); await history.updateTable();
+    expect(history.range()).toEqual({start:periodStart(Date.now(),period),end:Date.now()});
+    expect(history.tableRange()).toEqual(history.range());
+  });
 
   it('starts the resumable metadata migration independently of normal history restoration', async () => {
     store.storage.migrateMetadata.mockImplementation(() => new Promise<void>(() => {}));
