@@ -1,4 +1,5 @@
 using Lueftlotse.Api.Data;
+using Lueftlotse.Api.Features.Measurements;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,4 +33,8 @@ app.MapGet("/api/health/ready", async Task<IResult> (
 .Produces(StatusCodes.Status200OK)
 .Produces(StatusCodes.Status503ServiceUnavailable);
 
+app.MapMeasurementEndpoints();
+
 app.Run();
+
+public partial class Program;

@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Lueftlotse.Api/Lueftlotse.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Lueftlotse.Api.IntegrationTests/Lueftlotse.Api.IntegrationTests.csproj" />
+  </Folder>
 </Solution>
