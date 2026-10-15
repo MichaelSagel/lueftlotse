@@ -6,7 +6,9 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test"
+    "test": "ng test",
+    "android:prepare:release": "node scripts/prepare-android.mjs release",
+    "android:prepare:usb-debug": "node scripts/prepare-android.mjs usb-debug"
   },
   "private": true,
   "packageManager": "npm@11.19.1",

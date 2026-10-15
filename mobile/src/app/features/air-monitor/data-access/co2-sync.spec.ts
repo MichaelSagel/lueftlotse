@@ -249,4 +249,24 @@ describe('Manual measurement synchronization', () => {
   it('does nothing when no pending data exists', async () => {
     await sync.synchronize(); expect(request).not.toHaveBeenCalled(); expect(sync.result()).toContain('Keine');
   });
+  it('uses native HTTP for USB debug and safely retries after a lost native response', async () => {
+    await seed(2);
+    vi.mocked(Capacitor.isNativePlatform).mockReturnValue(true);
+    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [Co2Storage, Co2Sync, { provide: MEASUREMENT_API_CONFIG, useValue: { browserBaseUrl: '/api', nativeBaseUrl: 'http://127.0.0.1:5045/api', usbDebug: true } }] });
+    sync = TestBed.inject(Co2Sync);
+    const post = vi.spyOn(sync, 'postNative').mockRejectedValueOnce(new Error('response lost'));
+    await sync.synchronize();
+    expect(sync.counts()).toEqual({ pending: 2, synced: 0 });
+    const first = post.mock.calls[0][0];
+    post.mockResolvedValueOnce({ status: 200, data: { received: 2, inserted: 0, duplicates: 2 }, headers: {}, url: first.url });
+    await sync.synchronize();
+    expect(post.mock.calls[1][0].data).toEqual(first.data);
+    expect(first.url).toBe('http://127.0.0.1:5045/api/measurements/batch');
+    expect(sync.counts()).toEqual({ pending: 0, synced: 2 });
+    expect(request).not.toHaveBeenCalled();
+    await TestBed.inject(Co2Storage).close();
+  });
+
 });

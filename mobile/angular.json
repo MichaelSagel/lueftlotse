@@ -53,6 +53,15 @@
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true
+            },
+            "usb-debug": {
+              "fileReplacements": [
+                {
+                  "replace": "src/app/features/air-monitor/data-access/native-api.ts",
+                  "with": "src/app/features/air-monitor/data-access/native-api.usb-debug.ts"
+                }
+              ],
+              "outputPath": "dist/usb-debug"
             }
           },
           "defaultConfiguration": "production"

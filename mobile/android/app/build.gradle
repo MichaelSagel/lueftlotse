@@ -44,6 +44,20 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
+// Fail closed even when Gradle is invoked directly after a manual cap sync.
+tasks.register('verifyReleaseWebAssets', Exec) {
+    workingDir rootProject.projectDir.parentFile
+    commandLine 'node', '--input-type=module', '-e', "import {verifyAssets} from './scripts/verify-android-assets.mjs'; verifyAssets('android/app/src/main/assets/public', 'release');"
+}
+tasks.register('verifyDebugWebAssets', Exec) {
+    workingDir rootProject.projectDir.parentFile
+    commandLine 'node', '--input-type=module', '-e', "import {verifyAssets} from './scripts/verify-android-assets.mjs'; verifyAssets('android/app/src/main/assets/public', 'release'); verifyAssets('android/app/src/debug/assets/public', 'usb-debug');"
+}
+tasks.configureEach { task ->
+    if (task.name == 'preReleaseBuild') task.dependsOn 'verifyReleaseWebAssets'
+    if (task.name == 'preDebugBuild') task.dependsOn 'verifyDebugWebAssets'
+}
+
 try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {

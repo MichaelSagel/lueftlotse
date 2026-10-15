@@ -1,5 +1,5 @@
 import { DestroyRef, Injectable, inject, signal } from '@angular/core';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Co2Storage, PendingMeasurement, SyncSnapshot } from './co2-storage';
 import { MEASUREMENT_API_CONFIG } from './measurement-api.config';
 
@@ -65,11 +65,14 @@ export class Co2Sync {
           };
           const timeout = setTimeout(() => controller.abort(), 15_000);
           try {
-            const response = await fetch(this.endpoint, {
+            const response = Capacitor.getPlatform() === 'android' ? await this.postNative({
+              url: this.endpoint, headers: { 'Content-Type': 'application/json' }, data: body,
+              responseType: 'json', connectTimeout: 15_000, readTimeout: 15_000,
+            }) : await fetch(this.endpoint, {
               method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
             });
             if (response.status !== 200) throw new ServerError(response.status);
-            const ack = await response.json() as { received?: number; inserted?: number; duplicates?: number } | null;
+            const ack = ('data' in response ? response.data : await response.json()) as { received?: number; inserted?: number; duplicates?: number } | null;
             if (!ack || ack.received !== group.length || !Number.isInteger(ack.inserted) || !Number.isInteger(ack.duplicates) ||
                 ack.inserted! < 0 || ack.duplicates! < 0 || ack.inserted! + ack.duplicates! !== ack.received) {
               throw new Error('Invalid acknowledgement');
@@ -96,6 +99,8 @@ export class Co2Sync {
     }
   }
 
+  postNative(options: Parameters<typeof CapacitorHttp.post>[0]) { return CapacitorHttp.post(options); }
+
   private apiEndpoint(): string | null {
     const native = Capacitor.isNativePlatform();
     const base = native ? this.config.nativeBaseUrl : this.config.browserBaseUrl;
@@ -103,6 +108,7 @@ export class Co2Sync {
     if (native) {
       try {
         const url = new URL(base);
+        if (this.config.usbDebug && Capacitor.getPlatform() === 'android' && url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port === '5045' && url.pathname === '/api') return base + '/measurements/batch';
         if (!['http:', 'https:'].includes(url.protocol) || /^(localhost|127\..*|\[::1\]|0\.0\.0\.0)$/i.test(url.hostname)) return null;
       } catch { return null; }
     }

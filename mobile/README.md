@@ -69,7 +69,7 @@ Restart `ng serve` after editing `proxy.conf.json`.
 
 API base URLs are configured in
 `src/app/features/air-monitor/data-access/measurement-api.config.ts`.
-The browser uses `/api`. Native builds have no configured server (`nativeBaseUrl: null`)
+The browser uses `/api`. Native release builds have no configured server (`nativeBaseUrl: null`)
 and disable synchronization; the phone's localhost is not the development computer.
 
 Open **Synchronisierung** and choose **Jetzt synchronisieren** to send pending
@@ -83,5 +83,53 @@ automatic retries. IndexedDB v3 adds a sync-status index while retaining v1/v2
 history, primary keys, assigned IDs, metadata migration progress and simulator identity.
 
 ## Additional Resources
+
+### Android USB debug synchronization
+
+Use the installed Android SDK Platform-Tools and JDK 21. Set `JAVA_HOME` and
+`ANDROID_HOME` only in the current terminal; no administrator rights are needed
+when the phone's USB driver is already available. Enable USB debugging on the
+phone and approve this computer.
+
+From the repository root:
+
+```text
+npm --prefix mobile run android:prepare:usb-debug
+cd mobile/android
+cmd.exe /d /c "gradlew.bat assembleDebug -Pandroid.builder.sdkDownload=false --no-daemon --console=plain"
+```
+
+Start the backend on `http://127.0.0.1:5045` in Development using its existing
+User Secrets. With `adb` from SDK `platform-tools` (or its full path):
+
+```text
+adb devices
+adb -s <serial> reverse tcp:5045 tcp:5045
+adb -s <serial> reverse --list
+```
+
+Install the debug APK manually, then use **Synchronisierung**. The app calls
+`http://127.0.0.1:5045/api` through USB with native CapacitorHttp; Angular's dev
+server, LAN exposure and CORS changes are unnecessary. Disconnecting USB can
+lose a response: pending measurements keep their IDs and can be retried manually.
+Remove forwarding with `adb -s <serial> reverse --remove tcp:5045`.
+
+For release preparation use `npm --prefix mobile run android:prepare:release`,
+then `assembleRelease` from `mobile/android` with the same Gradle flags.
+Production assets always have no native API configured. USB assets are placed
+only in the Android debug source set, along with the HTTP permission restricted
+to `127.0.0.1`. Gradle checks web profile markers and the USB address before
+debug/release builds, including direct Gradle invocations. A plain `cap sync`
+without preparation intentionally fails these checks. Never copy USB assets
+into `src/main`. Release signing is configured separately.
+
+After building both APK variants, check the actual archives and manifests from
+the repository root (requires `ANDROID_HOME` and Build-Tools 36.0.0):
+
+```powershell
+& ./mobile/scripts/verify-android-apks.ps1
+node --test mobile/scripts/verify-android-assets.test.mjs
+```
+
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
