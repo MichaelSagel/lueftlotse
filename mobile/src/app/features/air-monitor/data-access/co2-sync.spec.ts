@@ -242,12 +242,13 @@ describe('Manual measurement synchronization', () => {
     async function inspect() {
       const db = await database();
       try {
-        expect(db.version).toBe(5);
+        expect(db.version).toBe(6);
         expect(Array.from(db.objectStoreNames)).toEqual(['bleCursors', 'bleGaps', 'bleReceipts', 'bleUndatable', 'measurements', 'metadata']);
         const transaction = db.transaction(['measurements', 'metadata', 'bleCursors'], 'readonly');
         const store = transaction.objectStore('measurements');
         expect(store.autoIncrement).toBe(true); expect(store.keyPath).toBeNull();
-        expect(Array.from(store.indexNames)).toEqual(['measurementId', 'syncStatus', 'time']);
+        expect(Array.from(store.indexNames)).toEqual(['deviceSequence', 'measurementId', 'syncStatus', 'time']);
+        expect(store.index('deviceSequence').keyPath).toEqual(['deviceId', 'source', 'sequence']);
         for (const name of ['measurementId', 'syncStatus', 'time']) {
           const index = store.index(name);
           expect(index.keyPath).toBe(name); expect(index.unique).toBe(name === 'measurementId'); expect(index.multiEntry).toBe(false);

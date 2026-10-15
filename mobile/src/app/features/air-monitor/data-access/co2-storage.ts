@@ -1,10 +1,14 @@
 ﻿import { Injectable } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
+import { HistoryContinuity } from '../domain/history-continuity';
 import { signal } from '@angular/core';
 import { prepareTerminalBatch, serviceRecordExpired, TerminalRecord, VerifiedBleBatch } from './ble-terminal-batch';
 import { BleCursorConflictError, BleImportConflictError, BleImportResult, BleReadyBatch, prepareReadyBatch, sameSensorMeasurement } from './ble-ready-batch';
 
-export interface Co2Measurement { readonly time: number; readonly ppm: number; readonly segment: string; }
+export interface Co2Measurement {
+  readonly time: number; readonly ppm: number; readonly segment: string;
+  readonly deviceId?: string; readonly source?: 'simulator' | 'sensor'; readonly sequence?: string;
+}
 /** History projections can still be read while legacy rows are being upgraded. */
 export interface StoredCo2Measurement extends Co2Measurement {
   readonly measurementId: string;
@@ -41,7 +45,7 @@ export class Co2Storage {
   private open(): Promise<IDBDatabase> {
     if (!this.database) {
       this.database = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('lueftlotse', 5);
+        const request = indexedDB.open('lueftlotse', 6);
         let blocked = false;
         request.onupgradeneeded = event => {
           if (event.oldVersion < 1) {
@@ -59,6 +63,10 @@ export class Co2Storage {
             request.result.createObjectStore('bleUndatable');
             request.result.createObjectStore('bleGaps');
             request.result.createObjectStore('bleReceipts');
+          }
+          if (event.oldVersion < 6) {
+            request.transaction!.objectStore('measurements').createIndex('deviceSequence', ['deviceId', 'source', 'sequence']);
+            request.transaction!.objectStore('bleGaps').createIndex('deviceId', 'deviceId');
           }
         };
         request.onsuccess = () => {
@@ -105,15 +113,79 @@ export class Co2Storage {
       transaction.onabort = () => reject(transaction.error ?? new Error('Verlauf konnte nicht geladen werden'));
     });
     const envelope = new HistoryEnvelope(start, end);
+    const continuity = new HistoryContinuity((deviceId, left, right) => this.hasConfirmedLoss(deviceId, left, right, cancelled));
     let after: PageCursor | null = null;
     do {
       if (cancelled()) throw new DOMException('Abgebrochen', 'AbortError');
       // Short transactions let pending writes commit between batches.
       const page = await this.page(start, end, after, 1000);
-      for (const point of page.entries) envelope.add(point);
+      for (const point of page.entries) {
+        if (cancelled()) throw new DOMException('Abgebrochen', 'AbortError');
+        envelope.add(await continuity.project(point));
+      }
       after = page.next;
     } while (after);
     return { ...totals, entries: envelope.points() };
+  }
+  private async hasConfirmedLoss(deviceId: string, left: bigint, right: bigint, cancelled: () => boolean): Promise<boolean> {
+    const low = (left < right ? left : right) + 1n;
+    const high = (left < right ? right : left) - 1n;
+    if (low > high) return false;
+    let after: IDBValidKey | undefined;
+    do {
+      if (cancelled()) throw new DOMException('Abgebrochen', 'AbortError');
+      const database = await this.open();
+      const page = await new Promise<{ gaps: { fromSequence: string; toSequence: string }[]; more: boolean; last?: IDBValidKey }>((resolve, reject) => {
+        const tx = database.transaction('bleGaps', 'readonly');
+        const request = tx.objectStore('bleGaps').index('deviceId').openCursor(IDBKeyRange.only(deviceId));
+        const gaps: { fromSequence: string; toSequence: string }[] = []; let more = false; let last: IDBValidKey | undefined;
+        request.onsuccess = () => {
+          const cursor = request.result; if (!cursor) return;
+          if (after !== undefined && indexedDB.cmp(cursor.primaryKey, after) <= 0) {
+            if (indexedDB.cmp(cursor.primaryKey, after) < 0) cursor.continuePrimaryKey(deviceId, after); else cursor.continue();
+            return;
+          }
+          if (gaps.length === 128) { more = true; return; }
+          gaps.push(cursor.value); last = cursor.primaryKey; cursor.continue();
+        };
+        tx.oncomplete = () => resolve({ gaps, more, last });
+        tx.onabort = () => reject(tx.error ?? new Error('GAP query failed'));
+      });
+      for (const gap of page.gaps) {
+        const from = BigInt(gap.fromSequence); const to = BigInt(gap.toSequence);
+        const start = from > low ? from : low; const end = to < high ? to : high;
+        if (start <= end && !await this.hasLocalSequenceRange(deviceId, start, end, cancelled)) return true;
+      }
+      after = page.more ? page.last : undefined;
+    } while (after !== undefined);
+    return false;
+  }
+  /** Exact-key jumps on the decimal-string index. Split at digit boundaries: never use numeric sequence casts. */
+  private async hasLocalSequenceRange(deviceId: string, start: bigint, end: bigint, cancelled: () => boolean): Promise<boolean> {
+    let next = start;
+    while (next <= end) {
+      if (cancelled()) throw new DOMException('Abgebrochen', 'AbortError');
+      const digitEnd = 10n ** BigInt(next.toString().length) - 1n;
+      const upper = digitEnd < end ? digitEnd : end;
+      const database = await this.open();
+      const result = await new Promise<{ next: bigint; missing: boolean }>((resolve, reject) => {
+        const tx = database.transaction('measurements', 'readonly');
+        const request = tx.objectStore('measurements').index('deviceSequence').openKeyCursor(
+          IDBKeyRange.bound([deviceId, 'sensor', next.toString()], [deviceId, 'sensor', upper.toString()]));
+        let expected = next; let processed = 0; let missing = false;
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor || (cursor.key as IDBValidKey[])[2] !== expected.toString()) { missing = true; return; }
+          expected++; processed++;
+          if (expected <= upper && processed < 256) cursor.continue([deviceId, 'sensor', expected.toString()]);
+        };
+        tx.oncomplete = () => resolve({ next: expected, missing });
+        tx.onabort = () => reject(tx.error ?? new Error('Sequence coverage query failed'));
+      });
+      if (result.missing) return false;
+      next = result.next;
+    }
+    return true;
   }
   async tableSnapshot(start: number, end: number): Promise<TableSnapshot> {
     const database = await this.open();

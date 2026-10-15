@@ -196,17 +196,24 @@ describe('BLE batch receiver with real IndexedDB transactions', () => {
       await storage.count();
       const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('lueftlotse'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
       try {
-        expect(db.version).toBe(5);
+        expect(db.version).toBe(6);
         expect(Array.from(db.objectStoreNames)).toEqual(['bleCursors', 'bleGaps', 'bleReceipts', 'bleUndatable', 'measurements', 'metadata']);
-        const tx = db.transaction(['measurements', 'bleCursors', 'metadata'], 'readonly');
+        const tx = db.transaction(['measurements', 'bleCursors', 'metadata', 'bleGaps', 'bleUndatable', 'bleReceipts'], 'readonly');
         const store = tx.objectStore('measurements');
-        expect(Array.from(store.indexNames)).toEqual(['measurementId', 'syncStatus', 'time']);
+        expect(Array.from(store.indexNames)).toEqual(['deviceSequence', 'measurementId', 'syncStatus', 'time']);
         expect(store.index('measurementId').unique).toBe(true);
+        expect(store.index('deviceSequence').keyPath).toEqual(['deviceId', 'source', 'sequence']);
+        expect(store.index('deviceSequence').unique).toBe(false); expect(store.index('deviceSequence').multiEntry).toBe(false);
+        expect(tx.objectStore('bleGaps').index('deviceId').keyPath).toBe('deviceId');
+        expect(tx.objectStore('bleGaps').index('deviceId').unique).toBe(false);
+        const indexedSensor = store.index('deviceSequence').get([otherDevice, 'sensor', '5']);
+        const services = ['bleGaps', 'bleUndatable', 'bleReceipts'].map(name => tx.objectStore(name).getAll());
         const rows = store.getAll(); const rowKeys = store.getAllKeys();
         const cursorKeys = tx.objectStore('bleCursors').getAllKeys(); const cursorValues = tx.objectStore('bleCursors').getAll();
         const identity = tx.objectStore('metadata').get('simulatorDeviceId');
         await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); });
         expect(rows.result).toEqual(old); expect(rowKeys.result).toEqual(keys); expect(identity.result).toBe(simulatorId);
+        expect(indexedSensor.result).toEqual(old[2]); services.forEach(request => expect(request.result).toEqual([]));
         expect(Object.fromEntries(cursorKeys.result.map((key, i) => [String(key), cursorValues.result[i]]))).toEqual({ [deviceId]: previousCursor.toString(), [otherDevice]: '5' });
         return { rows: rows.result, keys: rowKeys.result, cursorKeys: cursorKeys.result, cursorValues: cursorValues.result, identity: identity.result };
       } finally { db.close(); }

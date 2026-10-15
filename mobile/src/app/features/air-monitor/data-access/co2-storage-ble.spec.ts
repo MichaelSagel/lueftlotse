@@ -140,7 +140,7 @@ describe('Atomic BLE READY import', () => {
     expect((await saved())[0]).toEqual(simulator);
     expect(await storage.append({ time: 1700000001000, ppm: 700, segment: 'new' })).toBe(19);
     expect(await storage.syncSnapshot()).toMatchObject({ pending: 2, synced: 1 });
-    const upgraded = await open(); expect(upgraded.version).toBe(5);
+    const upgraded = await open(); expect(upgraded.version).toBe(6);
     expect(upgraded.transaction('measurements').objectStore('measurements').index('measurementId').unique).toBe(true);
   });
 });

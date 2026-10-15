@@ -66,6 +66,17 @@ does not decrease. The expired receipt is not recreated, even for a fresh batchI
 If service entries themselves have expired, a stale mixed packet is rejected rather
 than silently accepted or resurrected: their original content can no longer be proven.
 
+Schema v6 adds native indexes over existing values: `measurements.deviceSequence`
+on `[deviceId, source, sequence]` and `bleGaps.deviceId`. No measurement fields,
+keys, IDs, cursors or service reception times are rewritten. Chart history checks
+GAP between adjacent same-device/same-segment sensor readings before envelope
+aggregation. A GAP breaks the chart only if at least one sequence in its intersecting
+range is absent from local READY measurements. Coverage can include records outside
+the displayed time filter, but those records are not plotted. Sequence uses bigint
+throughout; decimal-string index seeks are split at digit boundaries and streamed
+in short pages. GAP and UNDATABLE never receive fabricated chart timestamps.
+Continuity labels are chart projections only; persisted device segment IDs stay intact.
+
 The injected transport's `send(ACK, signal)` is called only after commit.
 Disconnect during digest or the IndexedDB transaction cancels import and suppresses
 ACK; cancellation must also be honored by the future transport while sending.

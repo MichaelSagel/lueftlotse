@@ -71,7 +71,7 @@ describe('Persistent measurement metadata in IndexedDB', () => {
     const current = storage();
     await current.migrateMetadata();
     const saved = await snapshot();
-    expect(saved.version).toBe(5);
+    expect(saved.version).toBe(6);
     expect(saved.deviceId).toMatch(uuid);
     expect(saved.rows.map(row => row.key)).toEqual([3, 17, 105]);
     saved.rows.forEach((row, index) => {
