@@ -14,6 +14,7 @@ function databaseHarness(points: Co2Measurement[] = []) {
   };
   const openCursor = vi.fn(() => { queueMicrotask(step); return request; });
   const store = {
+    openCursor,
     add: vi.fn(() => ({ result: points.length + 1 })), clear: vi.fn(), count: vi.fn(() => ({ result: 1000 })),
     openKeyCursor: vi.fn(() => ({ result: { primaryKey: points.length } })),
     index: vi.fn(() => ({ count: vi.fn(() => ({ result: points.length })), openCursor })),
@@ -74,7 +75,10 @@ describe('Co2Storage IndexedDB transactions', () => {
     const harness = databaseHarness([{ time: 999, ppm: 650, segment: 'old' }]);
     const pruned = new Co2Storage().prune(1000); await flush();
     expect(harness.openCursor).toHaveBeenCalledWith({ cutoff: 1000, open: true }); expect(harness.deleted).toEqual([0]);
-    harness.transaction.oncomplete!(); await pruned;
+    harness.transaction.oncomplete!();
+    // Complete the three subsequent empty service-store transactions as well.
+    for (let i = 0; i < 3; i++) { await flush(); harness.transaction.oncomplete!(); }
+    await pruned;
   });
 
   it('continues bounded batches using a cursor and can cancel obsolete range reads', async () => {

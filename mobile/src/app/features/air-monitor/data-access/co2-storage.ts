@@ -1,6 +1,7 @@
 ﻿import { Injectable } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
 import { signal } from '@angular/core';
+import { prepareTerminalBatch, serviceRecordExpired, TerminalRecord, VerifiedBleBatch } from './ble-terminal-batch';
 import { BleCursorConflictError, BleImportConflictError, BleImportResult, BleReadyBatch, prepareReadyBatch, sameSensorMeasurement } from './ble-ready-batch';
 
 export interface Co2Measurement { readonly time: number; readonly ppm: number; readonly segment: string; }
@@ -18,16 +19,29 @@ export interface PageCursor { readonly time: number; readonly key: number; }
 export interface MeasurementPage { entries: Co2Measurement[]; next: PageCursor | null; }
 export interface TableSnapshot { count: number; maxKey: number; }
 
+interface ClearState { revision: number; clearing: number; listeners: Set<() => void>; }
+const historyClears = new WeakMap<IDBFactory, ClearState>();
+const serviceStores = ['bleUndatable', 'bleGaps', 'bleReceipts'] as const;
+
 @Injectable()
 export class Co2Storage {
   readonly changes = signal(0);
   private database: Promise<IDBDatabase> | undefined;
   private migration: Promise<void> | undefined;
   private generation = 0;
+  private clearState(): ClearState {
+    let state = historyClears.get(indexedDB);
+    if (!state) { state = { revision: 0, clearing: 0, listeners: new Set() }; historyClears.set(indexedDB, state); }
+    return state;
+  }
+  get historyClearing(): boolean { return this.clearState().clearing > 0; }
+  onHistoryCleared(listener: () => void): () => void {
+    const state = this.clearState(); state.listeners.add(listener); return () => state.listeners.delete(listener);
+  }
   private open(): Promise<IDBDatabase> {
     if (!this.database) {
       this.database = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('lueftlotse', 4);
+        const request = indexedDB.open('lueftlotse', 5);
         let blocked = false;
         request.onupgradeneeded = event => {
           if (event.oldVersion < 1) {
@@ -40,6 +54,11 @@ export class Co2Storage {
           if (event.oldVersion < 4) {
             request.transaction!.objectStore('measurements').createIndex('measurementId', 'measurementId', { unique: true });
             request.result.createObjectStore('bleCursors');
+          }
+          if (event.oldVersion < 5) {
+            request.result.createObjectStore('bleUndatable');
+            request.result.createObjectStore('bleGaps');
+            request.result.createObjectStore('bleReceipts');
           }
         };
         request.onsuccess = () => {
@@ -272,16 +291,35 @@ export class Co2Storage {
   /** Import already verified READY records without touching the live source/current reading. */
   async importReadyBatch(batch: BleReadyBatch): Promise<BleImportResult> {
     const rows = prepareReadyBatch(batch);
-    const deviceId = rows[0].deviceId;
-    const after = batch.afterSequence; const through = batch.throughSequence;
+    return this.commitBleBatch(rows.map(row => ({ kind: 'ready', row })), rows[0].deviceId, batch.afterSequence, batch.throughSequence);
+  }
+  /** Caller verifies digest first. Result counts terminal entries, including GAP/UNDATABLE. */
+  async importBleBatch(batch: VerifiedBleBatch, signal?: AbortSignal): Promise<BleImportResult> {
+    const records = prepareTerminalBatch(batch);
+    const receipt = { batchId: batch.batchId.toLowerCase(), deviceId: batch.deviceId.toLowerCase(), afterSequence: batch.afterSequence.toString(), throughSequence: batch.throughSequence.toString(), count: batch.count, digest: Array.from(batch.digest, n => n.toString(16).padStart(2, '0')).join('') };
+    return this.commitBleBatch(records, receipt.deviceId, batch.afterSequence, batch.throughSequence, receipt, signal);
+  }
+  private async commitBleBatch(records: TerminalRecord[], deviceId: string, after: bigint, through: bigint,
+    receipt?: { batchId: string; deviceId: string; afterSequence: string; throughSequence: string; count: number; digest: string }, signal?: AbortSignal): Promise<BleImportResult> {
+    signal?.throwIfAborted();
+    const state = this.clearState(); const revision = state.revision;
+    if (state.clearing) throw new DOMException('History is being cleared', 'AbortError');
+    const receivedAt = Date.now();
     const database = await this.open();
     return new Promise((resolve, reject) => {
-      const transaction = database.transaction(['measurements', 'bleCursors'], 'readwrite');
+      signal?.throwIfAborted();
+      if (state.clearing || state.revision !== revision) throw new DOMException('History was cleared', 'AbortError');
+      const transaction = database.transaction(['measurements', 'bleCursors', 'bleUndatable', 'bleGaps', 'bleReceipts'], 'readwrite');
+      const cancel = () => { try { transaction.abort(); } catch { /* Already committed/aborted. */ } };
+      signal?.addEventListener('abort', cancel, { once: true });
+      const stopOnClear = this.onHistoryCleared(cancel);
+      const cleanup = () => { signal?.removeEventListener('abort', cancel); stopOnClear(); };
       const store = transaction.objectStore('measurements');
       const cursors = transaction.objectStore('bleCursors');
       let failure: unknown; let inserted = 0; let duplicates = 0; let cursor = 0n;
-      transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('BLE import aborted'));
+      transaction.onabort = () => { cleanup(); reject(failure ?? signal?.reason ?? transaction.error ?? new Error('BLE import aborted')); };
       transaction.oncomplete = () => {
+        cleanup();
         if (inserted || cursor < through) this.changes.update(value => value + 1);
         resolve({ inserted, duplicates, cursor: cursor > through ? cursor : through });
       };
@@ -291,6 +329,15 @@ export class Co2Storage {
           try { transaction.abort(); } catch { /* An earlier request may already have aborted it. */ }
         }
       };
+      const receipts = transaction.objectStore('bleReceipts');
+      let knownReceipt = false;
+      if (receipt) {
+        const previous = receipts.get(receipt.batchId);
+        previous.onsuccess = () => guard(() => {
+          knownReceipt = previous.result !== undefined;
+          if (previous.result && Object.entries(receipt).some(([key, value]) => previous.result[key] !== value)) throw new BleImportConflictError();
+        });
+      }
       const savedCursor = cursors.get(deviceId);
       savedCursor.onsuccess = () => guard(() => {
         cursor = BigInt(savedCursor.result ?? '0');
@@ -298,20 +345,41 @@ export class Co2Storage {
         if (after !== cursor && !replay) throw new BleCursorConflictError();
         let index = 0;
         const next = () => guard(() => {
-          if (index === rows.length) {
+          if (index === records.length) {
+            if (receipt && !knownReceipt && !replay) receipts.put({ ...receipt, receivedAt }, receipt.batchId);
             if (through > cursor) cursors.put(through.toString(), deviceId);
             return;
           }
-          const row = rows[index++];
-          const existing = store.index('measurementId').get(row.measurementId);
-          existing.onsuccess = () => guard(() => {
-            if (existing.result !== undefined) {
-              if (!sameSensorMeasurement(existing.result, row)) throw new BleImportConflictError();
+          const item = records[index++];
+          if (item.kind === 'gap') {
+            const row = item.row;
+            const gaps = transaction.objectStore('bleGaps');
+            const key = [deviceId, row.fromSequence, row.toSequence, row.reason];
+            const existing = gaps.get(key);
+            existing.onsuccess = () => guard(() => {
+              if (existing.result) { duplicates++; next(); }
+              else {
+                if (replay) throw new BleCursorConflictError();
+                const added = gaps.add({ ...row, receivedAt }, key); added.onsuccess = () => { inserted++; next(); };
+              }
+            });
+            return;
+          }
+          const row = item.row;
+          const undatable = transaction.objectStore('bleUndatable');
+          const readyLookup = store.index('measurementId').get(row.measurementId);
+          const undatedLookup = undatable.get(row.measurementId);
+          undatedLookup.onsuccess = () => guard(() => {
+            const existing = item.kind === 'ready' ? readyLookup.result : undatedLookup.result;
+            const opposite = item.kind === 'ready' ? undatedLookup.result : readyLookup.result;
+            if (opposite) throw new BleImportConflictError();
+            if (existing !== undefined) {
+              const same = item.kind === 'ready' ? sameSensorMeasurement(existing, item.row) : Object.entries(row).every(([key, value]) => existing[key] === value);
+              if (!same) throw new BleImportConflictError();
               duplicates++; next();
             } else {
-              // A stale replay may not resurrect rows removed by retention/deletion.
               if (replay) throw new BleCursorConflictError();
-              const addition = store.add(row);
+              const addition = item.kind === 'ready' ? store.add(row) : undatable.add({ ...row, receivedAt }, row.measurementId);
               addition.onsuccess = () => { inserted++; next(); };
             }
           });
@@ -330,23 +398,53 @@ export class Co2Storage {
     });
   }
   async clear(): Promise<void> {
-    const database = await this.open();
-    return new Promise((resolve, reject) => {
-      const transaction = database.transaction(['measurements', 'bleCursors'], 'readwrite');
-      transaction.objectStore('measurements').clear(); transaction.objectStore('bleCursors').clear();
-      transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve(); };
-      transaction.onabort = () => reject(transaction.error ?? new Error('History clear failed'));
-    });
+    const state = this.clearState(); state.revision++; state.clearing++;
+    try {
+      for (const listener of [...state.listeners]) listener();
+      const database = await this.open();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(['measurements', 'bleCursors', ...serviceStores], 'readwrite');
+        for (const name of ['measurements', 'bleCursors', ...serviceStores]) transaction.objectStore(name).clear();
+        transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve(); };
+        transaction.onabort = () => reject(transaction.error ?? new Error('History clear failed'));
+      });
+    } finally { state.clearing--; }
   }
-  /** Strict upper bound keeps measurements exactly at the retention boundary. */
-  prune(cutoff: number): Promise<void> {
-    return this.write(store => {
+  /** Strict upper bound preserves records exactly at the calendar retention cutoff. */
+  async prune(cutoff: number): Promise<void> {
+    await this.write(store => {
       const request = store.index('time').openCursor(IDBKeyRange.upperBound(cutoff, true));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (cursor) { cursor.delete(); cursor.continue(); }
-      };
+      request.onsuccess = () => { const cursor = request.result; if (cursor) { cursor.delete(); cursor.continue(); } };
     });
+    // Primary-key pages avoid loading all service history or a long write transaction.
+    // receivedAt is a value field, so this also works with databases created by the v5 draft.
+    const firstSeenAt = Date.now();
+    for (const name of serviceStores) {
+      let after: IDBValidKey | undefined;
+      do {
+        const database = await this.open();
+        const page = await new Promise<{ more: boolean; last?: IDBValidKey }>((resolve, reject) => {
+          const tx = database.transaction(name, 'readwrite');
+          const request = tx.objectStore(name).openCursor(after === undefined ? undefined : IDBKeyRange.lowerBound(after, true));
+          let processed = 0; let more = false; let last: IDBValidKey | undefined;
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return;
+            if (processed === 200) { more = true; return; }
+            processed++; last = cursor.primaryKey;
+            const value = cursor.value;
+            if (typeof value.receivedAt !== 'number' || !Number.isFinite(value.receivedAt)) {
+              // Legacy v5 lacks reception time: first local observation is explicitly estimated.
+              cursor.update({ ...value, receivedAt: firstSeenAt, receivedAtEstimated: true });
+            } else if (serviceRecordExpired(value.receivedAt, firstSeenAt)) cursor.delete();
+            cursor.continue();
+          };
+          tx.oncomplete = () => resolve({ more, last });
+          tx.onabort = () => reject(tx.error ?? new Error('BLE service retention failed'));
+        });
+        after = page.more ? page.last : undefined;
+      } while (after !== undefined);
+    }
   }
   async close(): Promise<void> {
     this.generation++;
