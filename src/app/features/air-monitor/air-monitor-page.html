@@ -20,6 +20,7 @@
   <div id="air-monitor-history" [hidden]="!history.visible()">
     @if (historyCreated()) { <app-co2-chart /> }
   </div>
+  <app-device-discovery />
   <footer>
     <p>Simulierte Werte · Kein Sensor verbunden</p>
     <p>Demo-Schwellen: unter 1000 ppm grün, 1000–1999 ppm gelb, ab 2000 ppm rot. Keine medizinische Bewertung.</p>
