@@ -4,3 +4,8 @@ GET {{Lueftlotse.Api_HostAddress}}/api/health
 Accept: application/json
 
 ###
+
+GET {{Lueftlotse.Api_HostAddress}}/api/health/ready
+Accept: application/json
+
+###
