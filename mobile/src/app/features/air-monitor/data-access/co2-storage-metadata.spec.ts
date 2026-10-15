@@ -71,7 +71,7 @@ describe('Persistent measurement metadata in IndexedDB', () => {
     const current = storage();
     await current.migrateMetadata();
     const saved = await snapshot();
-    expect(saved.version).toBe(3);
+    expect(saved.version).toBe(4);
     expect(saved.deviceId).toMatch(uuid);
     expect(saved.rows.map(row => row.key)).toEqual([3, 17, 105]);
     saved.rows.forEach((row, index) => {
@@ -113,7 +113,7 @@ describe('Persistent measurement metadata in IndexedDB', () => {
     expect(final.rows.every(row => row.value.deviceId === final.deviceId && row.value.syncStatus === 'pending')).toBe(true);
     final.rows.forEach((row, i) => expect(row.value).toMatchObject(legacy[i][1]));
     expect(final.progress).toEqual({ lastKey: 2401, complete: true });
-  });
+  }, 15000); // Backfill also maintains the v4 unique measurementId index.
 
   it('does not allocate or change UUIDs when migration runs again after restart', async () => {
     await seed([[1, { time: 1000, ppm: 650, segment: 'one' }]]);

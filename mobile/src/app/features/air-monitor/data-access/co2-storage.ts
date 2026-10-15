@@ -1,6 +1,7 @@
 ﻿import { Injectable } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
 import { signal } from '@angular/core';
+import { BleCursorConflictError, BleImportConflictError, BleImportResult, BleReadyBatch, prepareReadyBatch, sameSensorMeasurement } from './ble-ready-batch';
 
 export interface Co2Measurement { readonly time: number; readonly ppm: number; readonly segment: string; }
 /** History projections can still be read while legacy rows are being upgraded. */
@@ -26,7 +27,7 @@ export class Co2Storage {
   private open(): Promise<IDBDatabase> {
     if (!this.database) {
       this.database = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('lueftlotse', 3);
+        const request = indexedDB.open('lueftlotse', 4);
         let blocked = false;
         request.onupgradeneeded = event => {
           if (event.oldVersion < 1) {
@@ -36,6 +37,10 @@ export class Co2Storage {
           // Keep versionchange short: the history is backfilled in resumable transactions.
           if (event.oldVersion < 2) request.result.createObjectStore('metadata');
           if (event.oldVersion < 3) request.transaction!.objectStore('measurements').createIndex('syncStatus', 'syncStatus');
+          if (event.oldVersion < 4) {
+            request.transaction!.objectStore('measurements').createIndex('measurementId', 'measurementId', { unique: true });
+            request.result.createObjectStore('bleCursors');
+          }
         };
         request.onsuccess = () => {
           if (blocked) { request.result.close(); return; }
@@ -264,7 +269,75 @@ export class Co2Storage {
       }
     });
   }
-  clear(): Promise<void> { return this.write(store => { store.clear(); }); }
+  /** Import already verified READY records without touching the live source/current reading. */
+  async importReadyBatch(batch: BleReadyBatch): Promise<BleImportResult> {
+    const rows = prepareReadyBatch(batch);
+    const deviceId = rows[0].deviceId;
+    const after = batch.afterSequence; const through = batch.throughSequence;
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction(['measurements', 'bleCursors'], 'readwrite');
+      const store = transaction.objectStore('measurements');
+      const cursors = transaction.objectStore('bleCursors');
+      let failure: unknown; let inserted = 0; let duplicates = 0; let cursor = 0n;
+      transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('BLE import aborted'));
+      transaction.oncomplete = () => {
+        if (inserted || cursor < through) this.changes.update(value => value + 1);
+        resolve({ inserted, duplicates, cursor: cursor > through ? cursor : through });
+      };
+      const guard = (operation: () => void) => {
+        try { operation(); } catch (error) {
+          failure ??= error;
+          try { transaction.abort(); } catch { /* An earlier request may already have aborted it. */ }
+        }
+      };
+      const savedCursor = cursors.get(deviceId);
+      savedCursor.onsuccess = () => guard(() => {
+        cursor = BigInt(savedCursor.result ?? '0');
+        const replay = after < cursor && through <= cursor;
+        if (after !== cursor && !replay) throw new BleCursorConflictError();
+        let index = 0;
+        const next = () => guard(() => {
+          if (index === rows.length) {
+            if (through > cursor) cursors.put(through.toString(), deviceId);
+            return;
+          }
+          const row = rows[index++];
+          const existing = store.index('measurementId').get(row.measurementId);
+          existing.onsuccess = () => guard(() => {
+            if (existing.result !== undefined) {
+              if (!sameSensorMeasurement(existing.result, row)) throw new BleImportConflictError();
+              duplicates++; next();
+            } else {
+              // A stale replay may not resurrect rows removed by retention/deletion.
+              if (replay) throw new BleCursorConflictError();
+              const addition = store.add(row);
+              addition.onsuccess = () => { inserted++; next(); };
+            }
+          });
+        });
+        next();
+      });
+    });
+  }
+  async bleCursor(deviceId: string): Promise<bigint> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction('bleCursors', 'readonly');
+      const request = transaction.objectStore('bleCursors').get(deviceId.toLowerCase());
+      transaction.oncomplete = () => resolve(BigInt(request.result ?? '0'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('BLE cursor read failed'));
+    });
+  }
+  async clear(): Promise<void> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction(['measurements', 'bleCursors'], 'readwrite');
+      transaction.objectStore('measurements').clear(); transaction.objectStore('bleCursors').clear();
+      transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve(); };
+      transaction.onabort = () => reject(transaction.error ?? new Error('History clear failed'));
+    });
+  }
   /** Strict upper bound keeps measurements exactly at the retention boundary. */
   prune(cutoff: number): Promise<void> {
     return this.write(store => {

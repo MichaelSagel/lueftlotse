@@ -225,16 +225,49 @@ describe('Manual measurement synchronization', () => {
       };
       request.onsuccess = () => resolve(request.result);
     });
-    const id = crypto.randomUUID(); const device = crypto.randomUUID();
-    await new Promise<void>(resolve => {
+    const device = crypto.randomUUID();
+    const originals: [number, StoredCo2Measurement][] = [
+      [3, { time: 1000, ppm: 650, segment: 'one', measurementId: crypto.randomUUID(), deviceId: device, source: 'simulator', syncStatus: 'synced' }],
+      [17, { time: 2000, ppm: 1100, segment: 'two', measurementId: crypto.randomUUID(), deviceId: device, source: 'simulator', syncStatus: 'pending' }],
+      [105, { time: 2000, ppm: 2100, segment: 'another:session', measurementId: crypto.randomUUID(), deviceId: crypto.randomUUID(), source: 'simulator', syncStatus: 'synced' }],
+    ];
+    await new Promise<void>((resolve, reject) => {
       const transaction = legacy.transaction(['measurements', 'metadata'], 'readwrite');
       transaction.objectStore('metadata').put(device, 'simulatorDeviceId');
-      transaction.objectStore('measurements').add({ time: 1000, ppm: 650, segment: 'one', measurementId: id, deviceId: device, source: 'simulator', syncStatus: 'synced' }, 8);
+      for (const [key, row] of originals) transaction.objectStore('measurements').add(row, key);
       transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
     });
     legacy.close(); await storage.migrateMetadata();
-    expect(await storage.syncSnapshot()).toEqual({ pending: 0, synced: 1, maxKey: 8 });
-    expect((await saved())[0]).toMatchObject({ measurementId: id, deviceId: device, syncStatus: 'synced' });
+    async function inspect() {
+      const db = await database();
+      try {
+        expect(db.version).toBe(4);
+        expect(Array.from(db.objectStoreNames)).toEqual(['bleCursors', 'measurements', 'metadata']);
+        const transaction = db.transaction(['measurements', 'metadata', 'bleCursors'], 'readonly');
+        const store = transaction.objectStore('measurements');
+        expect(store.autoIncrement).toBe(true); expect(store.keyPath).toBeNull();
+        expect(Array.from(store.indexNames)).toEqual(['measurementId', 'syncStatus', 'time']);
+        for (const name of ['measurementId', 'syncStatus', 'time']) {
+          const index = store.index(name);
+          expect(index.keyPath).toBe(name); expect(index.unique).toBe(name === 'measurementId'); expect(index.multiEntry).toBe(false);
+        }
+        const keys = store.getAllKeys(); const values = store.getAll();
+        const identity = transaction.objectStore('metadata').get('simulatorDeviceId');
+        const cursors = transaction.objectStore('bleCursors').getAll();
+        await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onabort = () => reject(transaction.error); });
+        expect(keys.result).toEqual(originals.map(([key]) => key));
+        expect(values.result).toEqual(originals.map(([, row]) => row));
+        expect(identity.result).toBe(device); expect(cursors.result).toEqual([]);
+        return { keys: keys.result, values: values.result, identity: identity.result, cursors: cursors.result };
+      } finally { db.close(); }
+    }
+    expect(await storage.syncSnapshot()).toEqual({ pending: 1, synced: 2, maxKey: 105 });
+    const migrated = await inspect();
+    await storage.close();
+    await storage.migrateMetadata();
+    expect(await inspect()).toEqual(migrated);
+    expect(await storage.syncSnapshot()).toEqual({ pending: 1, synced: 2, maxKey: 105 });
   });
 
   it.each([null, '/api', 'http://localhost:5045/api', 'http://127.0.0.1:5045/api', 'http://[::1]:5045/api'])('does not call HTTP on native without a usable server: %s', async nativeBaseUrl => {
