@@ -42,3 +42,17 @@ __screenshots__/
 # System files
 .DS_Store
 Thumbs.db
+
+# Local Android SDK paths and Gradle output
+local.properties
+/android/.gradle/
+/android/**/build/
+
+# Local configuration and signing secrets
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+key.properties
