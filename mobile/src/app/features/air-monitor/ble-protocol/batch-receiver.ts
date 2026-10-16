@@ -20,6 +20,11 @@ export class BatchReceiver {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private epoch = 0;
   lastError: unknown = null;
+  private completionPromise?: Promise<void>;
+  private finish?: {resolve: () => void; reject: (error: unknown) => void};
+  get completion(): Promise<void> {
+    return this.completionPromise ?? Promise.reject(new Error("No batch started"));
+  }
   private readonly deviceId: string;
   private readonly stopOnClear: () => void;
   constructor(deviceId: string, private readonly storage: Pick<Co2Storage, 'importBleBatch' | 'onHistoryCleared' | 'historyClearing'>,
@@ -30,7 +35,7 @@ export class BatchReceiver {
   get bufferedEntries(): number { return this.active?.entries.length ?? 0; }
   private release(): void { clearTimeout(this.timer); this.timer = undefined; this.active = undefined; }
   private fail(error: unknown): void {
-    this.epoch++; this.lastError = error; this.active?.controller.abort(error); this.release();
+    this.epoch++; this.lastError = error; this.active?.controller.abort(error); this.finish?.reject(error); this.finish = undefined; this.release();
   }
   disconnect(): void { this.fail(new Error('BLE connection closed')); }
   dispose(): void { this.stopOnClear(); this.disconnect(); }
@@ -54,6 +59,8 @@ export class BatchReceiver {
       requireProtocol(!this.active, 'Another batch is in progress');
       const started = this.now(); requireProtocol(Number.isFinite(started), 'Invalid monotonic clock');
       const batch: IncomingBatch = { begin: message, entries: [], ids: new Set(), next: message.afterSequence + 1n, started, controller: new AbortController(), phase: 'receiving' };
+      this.completionPromise = new Promise<void>((resolve,reject) => { this.finish = {resolve,reject}; });
+      void this.completionPromise.catch(() => {});
       this.lastError = null; this.active = batch;
       this.timer = setTimeout(() => this.fail(new ProtocolError('TIMEOUT', 'Batch deadline exceeded')), 30000);
       return;
@@ -83,6 +90,6 @@ export class BatchReceiver {
     this.assertActive(batch);
     batch.phase = 'ack';
     await this.transport.send({ type: 4, batchId: batch.begin.batchId, throughSequence: batch.begin.throughSequence, count: batch.begin.count, digest }, batch.controller.signal);
-    this.assertActive(batch); this.release();
+    this.assertActive(batch); this.finish?.resolve(); this.finish = undefined; this.release();
   }
 }

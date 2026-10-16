@@ -117,6 +117,20 @@ export class Co2History {
       await Promise.all([pending, ...this.reads]);
     } while (pending !== this.queue || this.reads.size);
   }
+  /** Refresh committed imports without feeding the simulator/source reading stream. */
+  imported(): Promise<void> {
+    if (this.destroyed) return Promise.resolve();
+    return this.enqueue(async () => {
+      this.count.set(await this.storage.count()); this.dataVersion++;
+      if (!this.visible()) return;
+      const range = this.range();
+      const key = await this.storage.newestKeyInRange(range.start, this.live() ? Date.now() : range.end, this.tableMaxKey);
+      this.latestRelevantKey = Math.max(this.latestRelevantKey, key);
+      this.newMeasurements.set(this.latestRelevantKey > this.tableMaxKey);
+      void this.refresh(true);
+      this.autoUpdateTable();
+    });
+  }
   beginSegment(): void { this.segment++; }
   record(ppm: number, time = Date.now(), segment = this.segment): Promise<void> {
     if (this.destroyed) return Promise.resolve();

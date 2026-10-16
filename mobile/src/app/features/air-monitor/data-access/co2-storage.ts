@@ -187,6 +187,23 @@ export class Co2Storage {
     }
     return true;
   }
+  /** Search only keys committed after a table snapshot; no full history allocation. */
+  async newestKeyInRange(start: number, end: number, afterKey: number): Promise<number> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction('measurements', 'readonly');
+      const request = transaction.objectStore('measurements').openCursor(IDBKeyRange.lowerBound(afterKey, true), 'prev');
+      let key = 0;
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (cursor.value.time >= start && cursor.value.time <= end) key = Number(cursor.primaryKey);
+        else cursor.continue();
+      };
+      transaction.oncomplete = () => resolve(key);
+      transaction.onabort = () => reject(transaction.error ?? new Error('History snapshot failed'));
+    });
+  }
   async tableSnapshot(start: number, end: number): Promise<TableSnapshot> {
     const database = await this.open();
     return new Promise((resolve, reject) => {

@@ -7,9 +7,21 @@ import { BleScanner } from './ble-scanner';
 
 type Status = Extract<Message, { type: 0x80 }>;
 type Info = ReturnType<typeof decodeInfo>;
+export type JournalCommand = Extract<Message, {type: 1 | 3 | 4}>;
+export class BleCommandError extends Error {
+  constructor(readonly code: number) { super('BLE protocol error ' + code); }
+}
+export interface BleJournalLink {
+  readonly info: Info;
+  readonly signal: AbortSignal;
+  request(command: JournalCommand, types: readonly number[], signal: AbortSignal, prepared?: (id: number) => void): Promise<Message>;
+  listen(receive: (message: Message) => void): () => void;
+  close(): Promise<void>;
+  release(): void;
+}
 interface Request {
-  id: number;
-  resolve: (status: Status) => void;
+  types: readonly number[];
+  resolve: (message: Message) => void;
   reject: (error: unknown) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
@@ -23,7 +35,11 @@ interface Session {
   nextId: number;
   queued: number;
   tail: Promise<void>;
-  request?: Request;
+  requests: Map<number, Request>;
+  writeTail: Promise<void>;
+  listeners: Set<(message: Message) => void>;
+  leased: boolean;
+  exchanges: number;
   cleanup?: Promise<void>;
   closing?: Promise<void>;
 }
@@ -57,7 +73,7 @@ export class BleConnection {
     if (this.destroyed || this.document.hidden || this.session || !id) throw new Error('BLE session unavailable');
     signal?.throwIfAborted();
     const session: Session = { id, abort: new AbortController(), assembler: new FragmentAssembler('events'),
-      pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, tail: Promise.resolve() };
+      pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, tail: Promise.resolve(), requests: new Map(), writeTail: Promise.resolve(), listeners: new Set(), leased: false, exchanges: 0 };
     this.session = session; this.info.set(null); this.status.set(null); this.error.set(null); this.state.set('connecting');
     const cancel = () => { void this.close(session, signal?.reason ?? new Error('Cancelled')).catch(() => {}); };
     signal?.addEventListener('abort', cancel, { once: true });
@@ -91,8 +107,24 @@ export class BleConnection {
 
   getStatus(): Promise<Status> {
     const session = this.session;
-    if (!session || this.state() !== 'ready') return Promise.reject(new Error('BLE is not ready'));
+    if (!session || session.leased || this.state() !== 'ready') return Promise.reject(new Error('BLE is not ready'));
     return this.enqueueStatus(session);
+  }
+
+  /** Exclusive ownership of journal requests; no generic raw writes escape this session. */
+  journal(): BleJournalLink {
+    const session = this.session; const info = this.info();
+    if (!session || !info || session.leased || session.queued || this.state() !== 'ready') throw new Error('BLE journal unavailable');
+    session.leased = true;
+    let released = false;
+    const owned = () => { this.assertCurrent(session); if (released) throw new Error('Journal released'); };
+    return {
+      info, signal: session.abort.signal,
+      request: (command, types, signal, prepared) => { owned(); return this.exchange(session, command, types, signal, prepared); },
+      listen: receive => { owned(); session.listeners.add(receive); return () => session.listeners.delete(receive); },
+      close: () => this.close(session),
+      release: () => { released = true; session.leased = false; },
+    };
   }
 
   disconnect(): Promise<void> {
@@ -127,52 +159,74 @@ export class BleConnection {
   private enqueueStatus(session: Session): Promise<Status> {
     if (session.queued >= 4) return Promise.reject(new Error('BLE command queue full'));
     session.queued++;
-    const result = session.tail.then(async () => {
-      this.assertCurrent(session);
-      if (session.nextId > 65534) throw new Error('BLE message IDs exhausted; reconnect required');
-      const id = session.nextId++;
-      const response = new Promise<Status>((resolve, reject) => { session.request = { id, resolve, reject }; });
-      // Attach immediately: disconnect or an ERROR can arrive while write is still pending.
-      void response.catch(() => {});
-      try {
-        for (const frame of fragmentMessage({ type: 1 }, id, 'control')) {
-          await this.operation(session, () => this.adapter.write(session.id, new DataView(frame.buffer, frame.byteOffset, frame.byteLength)));
-        }
-        if (session.request) session.request.timer = setTimeout(() => session.request?.reject(new Error('STATUS timed out')), 5000);
-        return await response;
-      } finally {
-        clearTimeout(session.request?.timer); session.request = undefined;
-      }
-    });
+    const result = session.tail.then(() => this.exchange(session, {type: 1}, [0x80], session.abort.signal) as Promise<Status>);
     session.tail = result.then(() => {}, error => { void this.close(session, error).catch(() => {}); });
     return result.finally(() => { session.queued--; });
+  }
+
+  /** Only writes occupy writeTail. Waiting for a FETCH result never blocks its ACK. */
+  private exchange(session: Session, command: JournalCommand, types: readonly number[], signal: AbortSignal, prepared?: (id: number) => void): Promise<Message> {
+    try { this.assertCurrent(session); signal.throwIfAborted(); } catch(error) { return Promise.reject(error); }
+    if (session.exchanges >= 4) return Promise.reject(new Error('BLE command queue full'));
+    if (session.nextId > 65534) {
+      const error = new Error('BLE message IDs exhausted; reconnect required');
+      void this.close(session, error).catch(() => {}); return Promise.reject(error);
+    }
+    session.exchanges++;
+    const id = session.nextId++;
+    let request!: Request;
+    const response = new Promise<Message>((resolve,reject) => { request = {types,resolve,reject}; });
+    session.requests.set(id,request); void response.catch(() => {});
+    const abort = () => request.reject(signal.reason);
+    signal.addEventListener('abort',abort,{once:true});
+    const write = session.writeTail.then(async () => {
+      this.assertCurrent(session); signal.throwIfAborted(); prepared?.(id);
+      for (const frame of fragmentMessage(command,id,'control')) {
+        signal.throwIfAborted();
+        await this.operation(session, () => this.adapter.write(session.id,new DataView(frame.buffer,frame.byteOffset,frame.byteLength)));
+      }
+      if (session.requests.has(id)) request.timer = setTimeout(() => request.reject(new Error('STATUS/command timed out')),5000);
+    });
+    session.writeTail = write.then(() => {}, () => {});
+    void write.catch(error => request.reject(error));
+    return (async () => {
+      try {
+        // Observe abort/errors immediately, including while an uncancellable write is pending.
+        const result = await response;
+        await write; this.assertCurrent(session); signal.throwIfAborted(); return result;
+      } finally {
+        session.exchanges--; clearTimeout(request.timer); session.requests.delete(id); signal.removeEventListener('abort',abort);
+      }
+    })();
   }
 
   private receive(session: Session, value: DataView): void {
     if (!this.current(session)) return;
     try {
       if (value.byteLength < 7 || value.byteLength > 20) throw new Error('Invalid Events ATT length');
-      const decoded = session.assembler.push(new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
+      const decoded = session.assembler.push(new Uint8Array(value.buffer,value.byteOffset,value.byteLength).slice());
       if (!decoded) return;
       const message = decoded.message;
-      if (message.type === 0x80) {
-        if (message.requestId === 65535 || message.requestId === session.request?.id) this.status.set(message);
-        if (message.requestId === session.request?.id) {
-          clearTimeout(session.request.timer); session.request.resolve(message); session.request = undefined;
-        }
-      } else if (message.type === 0xff && (message.requestId === 65535 || message.requestId === session.request?.id)) {
-        throw new Error(`BLE protocol error ${message.code}`);
+      const request = 'requestId' in message ? session.requests.get(message.requestId) : undefined;
+      if (message.type === 0x80 && (message.requestId === 65535 || request?.types.includes(0x80))) this.status.set(message);
+      for (const listener of session.listeners) listener(message);
+      if (message.type === 0xff) {
+        const error = new BleCommandError(message.code);
+        if (request) { clearTimeout(request.timer); request.reject(error); session.requests.delete(message.requestId); }
+        else if (message.requestId === 65535) throw error;
+      } else if (request && request.types.includes(message.type)) {
+        clearTimeout(request.timer); request.resolve(message); session.requests.delete(('requestId' in message) ? message.requestId : -1);
       }
-      // Other valid messages have no storage/current-reading side effects at this stage.
-    } catch (error) { void this.close(session, error).catch(() => {}); }
+    } catch(error) { void this.close(session,error).catch(() => {}); }
   }
 
   private close(session: Session, reason?: unknown): Promise<void> {
     if (session.closing) return session.closing;
     this.phase.set('closing');
     session.abort.abort(reason ?? new Error('BLE session closed'));
-    session.assembler.dispose(); clearTimeout(session.request?.timer);
-    session.request?.reject(session.abort.signal.reason); session.request = undefined;
+    session.assembler.dispose();
+    for (const request of session.requests.values()) { clearTimeout(request.timer); request.reject(session.abort.signal.reason); }
+    session.requests.clear(); session.listeners.clear();
     if (reason) { this.error.set(reason instanceof Error ? reason.message : String(reason)); this.state.set('error'); }
     else this.state.set('closing');
     session.cleanup = (async () => {

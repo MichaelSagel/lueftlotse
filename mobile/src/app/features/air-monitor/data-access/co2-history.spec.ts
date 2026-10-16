@@ -16,6 +16,31 @@ import { periodStart, retentionStart } from '../domain/history-range';
   afterEach(() => { TestBed.resetTestingModule(); vi.useRealTimers(); });
 
 
+
+
+  it('auto-updates the live first page after imports but does no chart/table reads while hidden',async()=>{
+    const history=openHistory();const now=Date.now();await history.record(650,now-1000);await history.whenSettled();
+    store.rows.push({ppm:900,time:now,segment:'sensor'});
+    await history.imported();await history.whenSettled();
+    expect(history.rows()[0].ppm).toBe(900);expect(history.tableCount()).toBe(2);expect(history.pageSize()).toBe(10);
+    history.setVisible(false);store.storage.load.mockClear();store.storage.tableSnapshot.mockClear();store.storage.newestKeyInRange.mockClear();
+    store.rows.push({ppm:950,time:now,segment:'sensor'});await history.imported();await history.whenSettled();
+    expect(history.count()).toBe(3);expect(store.storage.load).not.toHaveBeenCalled();expect(store.storage.tableSnapshot).not.toHaveBeenCalled();expect(store.storage.newestKeyInRange).not.toHaveBeenCalled();
+  });
+
+  it('refreshes imported history without changing source, table snapshot or unrelated-range indicator',async()=>{
+    const history=openHistory();const source=TestBed.inject(CO2_SOURCE);const current=source.current();const now=Date.now();
+    await history.record(650,now-1000);history.selectRange(now-2000,now);await history.whenSettled();
+    const rows=history.rows();const range=history.range();
+    store.rows.push({ppm:700,time:now-100000,segment:'sensor-old'});
+    await history.imported();await history.whenSettled();
+    expect(history.count()).toBe(2);expect(history.newMeasurements()).toBe(false);expect(history.rows()).toBe(rows);
+    store.rows.push({ppm:900,time:now-500,segment:'sensor-new'});
+    await history.imported();await history.whenSettled();
+    expect(history.count()).toBe(3);expect(history.rangeCount()).toBe(2);expect(history.newMeasurements()).toBe(true);
+    expect(history.range()).toBe(range);expect(history.rows()).toBe(rows);expect(source.current()).toBe(current);expect(source.state().status).toBe('stopped');
+  });
+
   it.each(['5m','1h','24h','1w','1mo','1y','2y'] as const)('uses the same applied quick range for graph and table: %s', async period => {
     vi.setSystemTime(new Date(2026,2,31,12,0,0));
     const history = openHistory(); await history.whenSettled();

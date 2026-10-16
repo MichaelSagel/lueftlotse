@@ -18,8 +18,11 @@ Only Android is supported by the default adapter; browser connect rejects before
 scanner/native calls. All known capability subsets are valid for this handshake;
 there is no invented live/journal capability requirement for GET_STATUS.
 
-One session owns one Events assembler, a Control ID allocator (0..65534), and a
-serialized queue of at most four STATUS commands including the active command.
+One session owns one Events assembler and a Control ID allocator (0..65534).
+STATUS requests remain serialized and bounded to four including the active one.
+Journal ownership is exclusive; journal requests use a separate serialized Control
+write queue and at most four active exchanges. Waiting for FETCH never occupies
+the write queue or prevents ACK. Expected responses are registered before writes.
 Events IDs are independent. Request matching is installed before writing, and a
 write response alone never establishes readiness. Unsolicited STATUS may update
 status, but cannot complete a GET_STATUS request. Unexpected valid LIVE/batch
@@ -37,11 +40,47 @@ quarantines the slot rather than risking an old disconnect affecting a new
 connection. Caller waits remain bounded; recovery from a stuck adapter currently
 requires recreating the application. Repeated cleanup never repeats native work.
 
-BatchReceiver, FETCH/TIME_SET/ACK handling, sensor Co2Source and measurement imports
-are **not connected** to this service. The connection UI confirms STATUS only, not
-reception of sensor measurements. Existing simulator DI and local history are
-unchanged. Tests use a fake adapter and fake timers; native
-GATT/CCCD behavior, radio loss and Android lifecycle timing still require hardware.
+## Explicit journal catch-up (no UI)
+
+`../data-access/ble-journal-sync.ts` now connects an exclusive journal session to
+BatchReceiver and IndexedDB. It is not provided or invoked by the connection UI.
+A future caller must use the existing BleConnection, Co2Storage and Co2History
+instances in their common DI scope. No new source/simulator is created.
+
+`run(signal?)` allows one run and requires capabilities `0x000A`. It reads a fresh
+STATUS, returns `time-required` if time is invalid or UNDATED exists, and never
+sends TIME_SET: there is no agreed uncertaintyMs estimator. With ready time it
+freezes STATUS.latest, reads the durable bigint cursor, and issues sequential
+FETCH(cursor, 100). BEGIN must match requestId, afterSequence and limit; entries
+are bounded to 100, and the receive queue to 102 messages (BEGIN + entries + END).
+The final packet is imported whole, even if it advances past the fixed target.
+Newly produced records do not extend this run's target.
+
+READY, GAP, UNDATABLE, receipt and cursor commit atomically. BatchReceiver exposes
+`completion`, resolving only after commit and transport.send; interruption, digest,
+storage and 30-second reception/verification timeout errors reject it. Here
+transport.send registers the ACK response before writing, then waits for matching
+ACK_ACCEPTED requestId and batchId. The next FETCH requires that confirmation and
+a reread cursor equal to the packet throughSequence and greater than its input.
+
+TIME_PENDING, BUSY and CLOCK_INVALID produce explicit results, with no polling or
+automatic retries. Missing/wrong ACK_ACCEPTED or any invalid packet stops the run
+and closes the link. A committed cursor survives ACK loss and is used on the next
+explicit connection/run. Cancellation, history clear, disconnect and background
+stop the entire run; receiver cancellation also aborts an uncommitted import.
+Errors/cancellation close the link; normal completion and time-required results
+release journal ownership without disconnecting. GAP_NOTICE/LIVE_READY do not
+import or advance cursors. An already-committed packet cannot be rolled back by
+a later cancellation; manual clear still removes it.
+
+Co2History.imported() refreshes counts/chart after commit, preserves past table
+snapshots, and auto-refreshes only the live first page. Hidden history does not
+query chart/table. Pending-table indicators check new primary keys in the selected
+time range with a streaming IndexedDB cursor, never all records in memory.
+Co2Source/current CO2 and the simulator are not modified. The connection UI still
+confirms STATUS only, not sensor measurements. No journal UI, live sensor source,
+automatic time synchronization or firmware is implemented. Native GATT/CCCD,
+radio loss and Android lifecycle timing still require hardware verification.
 
 - `codec.ts`: Info, message bodies, canonical entries and bounded batch digest
   input (including contiguous sequence coverage and duplicate-ID checks).

@@ -54,6 +54,18 @@ describe('BLE batch receiver with real IndexedDB transactions', () => {
     const data = await snapshot(); for (const records of Object.values(data)) expect(records).toEqual([]);
     expect(transport.acks).toEqual([]);
   }
+  it('exposes an awaitable completion that rejects on interruption and timeout', async () => {
+    const p = await packet([ready(1n)]);
+    await receiver.receive(p.begin);
+    const interrupted = expect(receiver.completion).rejects.toThrow('connection closed');
+    receiver.disconnect(); await interrupted;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await receiver.receive(p.begin);
+    const expired = expect(receiver.completion).rejects.toThrow('deadline');
+    await vi.advanceTimersByTimeAsync(30000); await expired;
+    expect(transport.acks).toEqual([]);
+    expect(receiver.bufferedEntries).toBe(0);
+  });
   it('commits READY/UNDATABLE/GAP and receipt atomically, then sends exact ACK', async () => {
     const undatable = { ...ready(2n), tag: 2 } as Entry;
     const p = await packet([ready(1n), undatable, { tag: 3, fromSequence: 3n, toSequence: 5n, reason: 1 }]);
@@ -65,6 +77,7 @@ describe('BLE batch receiver with real IndexedDB transactions', () => {
       expect(db['bleUndatable'][0]).not.toHaveProperty('time');
     };
     await receive(p);
+    await expect(receiver.completion).resolves.toBeUndefined();
     expect(transport.acks).toEqual([{ type: 4, batchId: p.begin.batchId, throughSequence: 5n, count: 3, digest: p.end.digest }]);
     expect(await storage.syncSnapshot()).toMatchObject({ pending: 1, synced: 0 });
   });

@@ -17,6 +17,7 @@ export function testStorage(seed: Co2Measurement[] = []) {
       for (const { row } of selected) envelope.add(row);
       return { count: rows.length, rangeCount: selected.length, entries: envelope.points() };
     }),
+    newestKeyInRange: vi.fn(async (start: number, end: number, after: number) => Math.max(0, ...sorted(start,end).filter(item => item.key > after).map(item => item.key))),
     tableSnapshot: vi.fn(async (start: number, end: number) => ({ count: sorted(start, end).length, maxKey: rows.length })),
     page: vi.fn(async (start: number, end: number, after: PageCursor | null, size = 50, direction = 'next', maxKey = Infinity) => {
       const reverse = direction === 'prev';
