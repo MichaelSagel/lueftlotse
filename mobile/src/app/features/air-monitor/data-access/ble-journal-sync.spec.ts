@@ -56,7 +56,7 @@ describe('BleJournalSync with real storage and a fake BLE peripheral',()=>{
   const connect=()=>connection.connect('native-address');
   it('imports sequential packets, persists before ACK, waits for fast ACK_ACCEPTED, then advances',async()=>{
     await connect();const result=await sync.run();expect(result).toMatchObject({status:'complete',cursor:2n,target:2n});
-    expect(commands.map(m=>m.type)).toEqual([1,1,3,4,3,4]);expect(await storage.count()).toBe(2);expect(imported).toHaveBeenCalledTimes(2);
+    expect(commands.map(m=>m.type)).toEqual([1,1,3,4,3,4]);expect(await storage.count()).toBe(2);expect(imported).toHaveBeenCalledTimes(2);expect(sync.savedMeasurements()).toBe(2);
     expect((await storage.syncSnapshot()).pending).toBe(2);expect(connection.state()).toBe('ready');
     expect(await storage.newestKeyInRange(0,Date.now(),0)).toBe(2);expect(await storage.newestKeyInRange(0,Date.now(),2)).toBe(0);expect(await storage.newestKeyInRange(0,1,0)).toBe(0);
   });
@@ -69,7 +69,7 @@ describe('BleJournalSync with real storage and a fake BLE peripheral',()=>{
     latest=9007199254740995n;
     const undatable={...ready(2n),tag:2} as Entry;
     batches=[[ready(1n),undatable,{tag:3,fromSequence:3n,toSequence:latest,reason:1}]];
-    await connect();expect(await sync.run()).toMatchObject({status:'complete',cursor:latest});expect(await storage.count()).toBe(1);
+    await connect();expect(await sync.run()).toMatchObject({status:'complete',cursor:latest});expect(await storage.count()).toBe(1);expect(sync.savedMeasurements()).toBe(1);
   });
   it.each([0,2,8,1])('requires both journal and non-destructive ACK capabilities: %s',async bits=>{
     capabilities=bits;await connect();expect((await sync.run()).status).toBe('unsupported');expect(commands.filter(m=>m.type===3)).toHaveLength(0);
@@ -88,11 +88,11 @@ describe('BleJournalSync with real storage and a fake BLE peripheral',()=>{
     if(kind==='order')batches=[[ready(2n)]];
     if(kind==='limit')batches=[Array.from({length:101},(_,i)=>ready(BigInt(i+1)))];
     await connect();expect((await sync.run()).status).toBe('error');expect(await storage.bleCursor(deviceId)).toBe(0n);
-    expect(commands.filter(m=>m.type===4)).toHaveLength(0);expect(imported).not.toHaveBeenCalled();
+    expect(commands.filter(m=>m.type===4)).toHaveLength(0);expect(imported).not.toHaveBeenCalled();expect(sync.savedMeasurements()).toBe(0);
   });
   it('rejects a wrong ACK_ACCEPTED without undoing committed records',async()=>{
     ackMode='wrong';await connect();expect((await sync.run()).status).toBe('error');expect(await storage.bleCursor(deviceId)).toBe(1n);
-    expect(commands.filter(m=>m.type===3)).toHaveLength(1);expect(adapter.disconnect).toHaveBeenCalledOnce();
+    expect(commands.filter(m=>m.type===3)).toHaveLength(1);expect(adapter.disconnect).toHaveBeenCalledOnce();expect(sync.savedMeasurements()).toBe(1);
   });
   it('stops after lost ACK_ACCEPTED and keeps the cursor for the next explicit run',async()=>{
     ackMode='lost';await connect();

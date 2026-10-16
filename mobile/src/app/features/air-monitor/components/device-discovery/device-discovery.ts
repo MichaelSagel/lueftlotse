@@ -1,10 +1,11 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { BleScanner } from '../../data-access/ble-scanner';
 import { BleConnection } from '../../data-access/ble-connection';
+import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-sync';
 
 @Component({
   selector: 'app-device-discovery',
-  providers: [BleScanner, BleConnection],
+  providers: [BleScanner, BleConnection, BleJournalSync],
   template: `
     <button type="button" (click)="toggle()" [attr.aria-expanded]="expanded()" aria-controls="ble-discovery">Gerät verbinden</button>
     <section id="ble-discovery" [hidden]="!expanded()" aria-label="Bluetooth-Geräte suchen">
@@ -17,11 +18,20 @@ import { BleConnection } from '../../data-access/ble-connection';
         <p role="status">{{ scanner.message() }}</p>
         <p role="status" class="connection-status">{{ phaseText() }}</p>
         @if (connection.state() === 'ready') {
-          <p>Gerät verbunden · STATUS bestätigt. Es werden noch keine Sensormesswerte übernommen.</p>
+          <p>Gerät verbunden · STATUS bestätigt. Die aktuelle CO₂-Anzeige bleibt im Simulator-Modus.</p>
           <p class="device-id">deviceId: {{ connection.info()?.deviceId }}</p>
+          <button type="button" class="download" (click)="download()" [disabled]="busy()">Messwerte herunterladen</button>
         }
+        @if (transferring()) {
+          <p role="status">Messwerte werden heruntergeladen …</p>
+          <button type="button" class="cancel-download" (click)="journal.cancel()">Abbrechen</button>
+        }
+        @if (transferring() || downloadResult()) {
+          <p class="download-count" role="status">Bestätigt gespeichert: {{ journal.savedMeasurements() }} Messwerte (einschließlich bereits vorhandener).</p>
+        }
+        @if (downloadResult(); as result) { <p class="download-result" role="status">{{ resultText() }} {{ result.message }}</p> }
         @if (connection.state() === 'ready' || busy()) {
-          <button type="button" class="disconnect" (click)="disconnect()" [disabled]="pending()">Trennen</button>
+          <button type="button" class="disconnect" (click)="disconnect()" [disabled]="pending() || transferring()">Trennen</button>
         }
         @if (errorText(); as error) { <p role="alert">{{ error }}</p> }
         <ul>
@@ -50,10 +60,20 @@ import { BleConnection } from '../../data-access/ble-connection';
 export class DeviceDiscovery {
   protected readonly scanner = inject(BleScanner);
   protected readonly connection = inject(BleConnection);
+  protected readonly journal = inject(BleJournalSync);
+  private readonly downloadPending = signal(false);
+  protected readonly downloadResult = signal<JournalResult | null>(null);
+  protected readonly transferring = computed(() => this.downloadPending() || this.journal.running());
+  protected readonly resultText = computed(() => {
+    const status = this.downloadResult()?.status;
+    return status ? ({complete: 'Übertragung abgeschlossen.', cancelled: 'Übertragung abgebrochen.',
+      disconnected: 'Verbindung verloren.', 'time-required': 'Gerätezeit erforderlich.', busy: 'Gerät beschäftigt.',
+      'clock-invalid': 'Ungültige Gerätezeit.', unsupported: 'Übertragung nicht unterstützt.', error: 'Fehler bei der Übertragung.'})[status] : '';
+  });
   protected readonly expanded = signal(false);
   protected readonly pending = signal(false);
   private readonly actionError = signal<string | null>(null);
-  protected readonly busy = computed(() => this.pending() || this.connection.state() === 'connecting' || this.connection.phase() === 'closing');
+  protected readonly busy = computed(() => this.transferring() || this.pending() || this.connection.state() === 'connecting' || this.connection.phase() === 'closing');
   protected readonly phaseText = computed(() => ({
     idle: '', 'scan-stop': 'Suche wird beendet …', initialize: 'Bluetooth wird vorbereitet …',
     connect: 'Verbindung wird hergestellt …', info: 'Geräteinformationen und Protokollversion werden geprüft …',
@@ -74,7 +94,7 @@ export class DeviceDiscovery {
   }
   protected async connect(id: string): Promise<void> {
     if (this.busy() || this.scanner.busy() || !this.scanner.available) return;
-    this.pending.set(true); this.actionError.set(null);
+    this.pending.set(true); this.actionError.set(null); this.downloadResult.set(null);
     try {
       await this.connection.disconnect();
       await this.connection.connect(id);
@@ -82,11 +102,18 @@ export class DeviceDiscovery {
     finally { this.pending.set(false); }
   }
   protected async disconnect(): Promise<void> {
-    if (this.pending()) return;
+    if (this.pending() || this.transferring()) return;
     this.pending.set(true); this.actionError.set(null);
     try { await this.connection.disconnect(); }
     catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
     finally { this.pending.set(false); }
+  }
+  protected async download(): Promise<void> {
+    if (this.busy() || this.connection.state() !== 'ready' || !this.scanner.available) return;
+    this.downloadPending.set(true); this.downloadResult.set(null);
+    try { this.downloadResult.set(await this.journal.run()); }
+    catch { this.downloadResult.set({status:'error',message:'Bitte die Verbindung prüfen und erneut versuchen.'}); }
+    finally { this.downloadPending.set(false); }
   }
   protected stopScan(): void {
     void this.scanner.stop().catch(() => {}); // Scanner exposes the failure through its state/message.

@@ -6,13 +6,15 @@ import { Co2History } from './co2-history';
 
 export type JournalResult = { status: 'complete' | 'time-required' | 'busy' | 'clock-invalid' | 'cancelled' | 'disconnected' | 'unsupported' | 'error'; cursor?: bigint; target?: bigint; message: string };
 
-/** Explicit, finite catch-up only. Not provided in UI and never changes Co2Source. */
+/** Explicit, finite catch-up only. Never changes Co2Source. */
 @Injectable()
 export class BleJournalSync {
   private readonly connection = inject(BleConnection);
   private readonly storage = inject(Co2Storage);
   private readonly history = inject(Co2History);
   readonly running = signal(false);
+  /** READY entries durably verified this run, including identical existing records. */
+  readonly savedMeasurements = signal(0);
   private active?: AbortController;
   constructor() { inject(DestroyRef).onDestroy(() => this.cancel()); }
   cancel(): void { this.active?.abort(new DOMException('Journal cancelled','AbortError')); }
@@ -20,11 +22,13 @@ export class BleJournalSync {
   async run(signal?: AbortSignal): Promise<JournalResult> {
     if (this.running()) return {status:'busy',message:'Eine Übertragung läuft bereits.'};
     this.running.set(true);
+    this.savedMeasurements.set(0);
     const controller = new AbortController(); this.active = controller;
     const cancel = () => controller.abort(new DOMException('Journal cancelled','AbortError'));
     signal?.addEventListener('abort',cancel,{once:true});
     let link: BleJournalLink | undefined; let receiver: BatchReceiver | undefined;
     let unlisten = () => {}; let uncleared = () => {}; let disconnected = false;
+    let batchReady = 0;
     const lost = () => { disconnected = true; controller.abort(new Error('BLE disconnected')); };
     try {
       signal?.throwIfAborted();
@@ -46,6 +50,7 @@ export class BleJournalSync {
         send: async (ack,batchSignal) => {
           controller.signal.throwIfAborted(); batchSignal.throwIfAborted();
           // Commit has happened, even if the ACK response is subsequently lost.
+          this.savedMeasurements.update(count => count + batchReady);
           await this.history.imported();
           controller.signal.throwIfAborted(); batchSignal.throwIfAborted();
           const accepted = await transport.request(ack,[0x87],controller.signal);
@@ -59,6 +64,7 @@ export class BleJournalSync {
         while (cursor < target) {
           controller.signal.throwIfAborted();
           const after = cursor; const limit = 100;
+          batchReady = 0;
           let fetchId = -1; let begun = false; let queued = 0;
           let chain = Promise.resolve();
           let beginProcessed: Promise<void> | undefined;
@@ -73,6 +79,7 @@ export class BleJournalSync {
             } else if (!begun) { controller.abort(new Error('Batch entry without BEGIN')); return; }
             // At most BEGIN + 100 entries + END, even during asynchronous digest/commit.
             if (++queued > 102) { controller.abort(new Error('Incoming batch queue full')); return; }
+            if (message.type === 0x83 && message.entry.tag === 1) batchReady++;
             chain = chain.then(async () => {
               controller.signal.throwIfAborted(); await receiver!.receive(message as BatchMessage);
             });

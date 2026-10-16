@@ -40,12 +40,23 @@ quarantines the slot rather than risking an old disconnect affecting a new
 connection. Caller waits remain bounded; recovery from a stuck adapter currently
 requires recreating the application. Repeated cleanup never repeats native work.
 
-## Explicit journal catch-up (no UI)
+## Explicit journal catch-up
 
-`../data-access/ble-journal-sync.ts` now connects an exclusive journal session to
-BatchReceiver and IndexedDB. It is not provided or invoked by the connection UI.
-A future caller must use the existing BleConnection, Co2Storage and Co2History
-instances in their common DI scope. No new source/simulator is created.
+`../data-access/ble-journal-sync.ts` connects an exclusive journal session to
+BatchReceiver and IndexedDB. DeviceDiscovery provides one coordinator alongside
+its existing BleConnection; Co2Storage and Co2History are inherited from the
+application route. No new storage/history/source/simulator instance is created.
+After handshake the UI offers an explicit download button, progress and cancel.
+Device switching, disconnect and repeat download are blocked during the run.
+Collapsing the block retains the same services/run and never starts a download.
+Backgrounding still disconnects and stops the run. Browser UI remains unavailable
+for native BLE. There is no automatic download or automatic TIME_SET.
+
+savedMeasurements resets on each explicit run and counts READY entries only after
+durable commit, including identical already-present measurements. GAP/UNDATABLE
+are not included. This is not an ACK_ACCEPTED counter: it remains nonzero if ACK
+is lost after commit. The UI states that already-present records are included,
+shows the explicit result, and keeps the main CO2 reading labeled Simulator.
 
 `run(signal?)` allows one run and requires capabilities `0x000A`. It reads a fresh
 STATUS, returns `time-required` if time is invalid or UNDATED exists, and never
@@ -78,7 +89,7 @@ snapshots, and auto-refreshes only the live first page. Hidden history does not
 query chart/table. Pending-table indicators check new primary keys in the selected
 time range with a streaming IndexedDB cursor, never all records in memory.
 Co2Source/current CO2 and the simulator are not modified. The connection UI still
-confirms STATUS only, not sensor measurements. No journal UI, live sensor source,
+confirms STATUS only, not live sensor measurements. No live sensor source,
 automatic time synchronization or firmware is implemented. Native GATT/CCCD,
 radio loss and Android lifecycle timing still require hardware verification.
 

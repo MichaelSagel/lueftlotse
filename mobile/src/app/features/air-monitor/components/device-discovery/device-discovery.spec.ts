@@ -1,4 +1,9 @@
 import { signal } from '@angular/core';
+import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-sync';
+import { Co2Storage } from '../../data-access/co2-storage';
+import { Co2History } from '../../data-access/co2-history';
+import { testStorage } from '../../data-access/co2-storage.testing';
+import { routes } from '../../../../app.routes';
 import { BleConnection } from '../../data-access/ble-connection';
 import { TestBed } from '@angular/core/testing';
 import { BleClient } from '@capacitor-community/bluetooth-le';
@@ -7,6 +12,7 @@ import { DeviceDiscovery } from './device-discovery';
 import { BleScanner } from '../../data-access/ble-scanner';
 
 describe('DeviceDiscovery', () => {
+  beforeEach(() => TestBed.overrideComponent(DeviceDiscovery,{add:{providers:[{provide:BleJournalSync,useValue:{running:signal(false),savedMeasurements:signal(0),run:vi.fn(),cancel:vi.fn()}}]}}));
   afterEach(() => vi.restoreAllMocks());
   it('is collapsed by default, provides accessible disclosure and stops on collapse', () => {
     const fixture = TestBed.createComponent(DeviceDiscovery);
@@ -57,6 +63,7 @@ describe('DeviceDiscovery', () => {
 describe('DeviceDiscovery connection UI with a fake session', () => {
   const deviceId = '12345678-1234-4234-8234-123456789abc';
   let calls: string[];
+  let journal: {running: ReturnType<typeof signal<boolean>>; savedMeasurements: ReturnType<typeof signal<number>>; run: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn>};
   let connection: {state: ReturnType<typeof signal<string>>; phase: ReturnType<typeof signal<string>>;
     info: ReturnType<typeof signal<{deviceId:string}|null>>; error: ReturnType<typeof signal<string|null>>;
     connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>};
@@ -65,13 +72,14 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>};
   beforeEach(() => {
     calls=[];
+    journal={running:signal(false),savedMeasurements:signal(0),run:vi.fn(async()=>({status:'complete',message:'OK'})),cancel:vi.fn()};
     connection={state:signal('idle'),phase:signal('idle'),info:signal(null),error:signal(null),
       connect:vi.fn(async (id:string)=>{calls.push('connect:'+id);connection.info.set({deviceId});connection.state.set('ready');connection.phase.set('ready');}),
       disconnect:vi.fn(async ()=>{calls.push('disconnect');connection.state.set('idle');connection.phase.set('idle');connection.info.set(null);}),
     };
     scanner={available:true,state:signal('done'),busy:signal(false),devices:signal([{id:'ble-a',name:'Sensor A',rssi:-55},{id:'ble-b',name:'Sensor B',rssi:-65}]),
       message:signal('Suche beendet.'),start:vi.fn(async()=>{}),stop:vi.fn(async()=>{})};
-    TestBed.overrideComponent(DeviceDiscovery,{set:{providers:[{provide:BleConnection,useValue:connection},{provide:BleScanner,useValue:scanner}]}});
+    TestBed.overrideComponent(DeviceDiscovery,{set:{providers:[{provide:BleConnection,useValue:connection},{provide:BleScanner,useValue:scanner},{provide:BleJournalSync,useValue:journal}]}});
   });
   const flush=async()=>{for(let i=0;i<12;i++) await Promise.resolve();};
   function open() {
@@ -93,7 +101,7 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     expect(el.querySelector('.device-id')).toBeNull();
     finish();await flush();fixture.detectChanges();
     expect(el.querySelector('.device-id')?.textContent).toContain(deviceId);
-    expect(el.textContent).toContain('noch keine Sensormesswerte');expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
+    expect(el.textContent).toContain('Simulator-Modus');expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
   });
   it('awaits explicit disconnection before connecting to a different device',async()=>{
     connection.state.set('ready');connection.phase.set('ready');connection.info.set({deviceId});
@@ -123,5 +131,52 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     expect(connection.connect).not.toHaveBeenCalled();expect(el.querySelector('[role="alert"]')?.textContent).toContain('sicher beendet');
     connection.error.set('BLE cleanup failed; session cannot be reused');fixture.detectChanges();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain('vollständig schließen');
+  });
+  it('downloads only explicitly after handshake, blocks switching and retains the same run when collapsed',async()=>{
+    let finish!: (result:JournalResult)=>void;
+    journal.run.mockImplementationOnce(async()=>{journal.running.set(true);const result=await new Promise<JournalResult>(r=>finish=r);journal.running.set(false);return result;});
+    const {fixture,el,buttons}=open();expect(el.querySelector('.download')).toBeNull();
+    buttons()[0].click();await flush();fixture.detectChanges();expect(journal.run).not.toHaveBeenCalled();
+    (el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
+    expect(journal.run).toHaveBeenCalledOnce();expect(el.textContent).toContain('heruntergeladen');
+    expect((el.querySelector('.download') as HTMLButtonElement).disabled).toBe(true);
+    expect((el.querySelector('.disconnect') as HTMLButtonElement).disabled).toBe(true);
+    expect(buttons().every(b=>b.disabled)).toBe(true);
+    buttons()[1].click();expect(connection.connect).toHaveBeenCalledOnce();
+    journal.savedMeasurements.set(12);fixture.detectChanges();expect(el.querySelector('.download-count')?.textContent).toContain('12 Messwerte');
+    connection.disconnect.mockClear();el.querySelector('button')!.click();fixture.detectChanges();el.querySelector('button')!.click();fixture.detectChanges();
+    expect(journal.run).toHaveBeenCalledOnce();expect(journal.cancel).not.toHaveBeenCalled();expect(connection.disconnect).not.toHaveBeenCalled();
+    journal.cancel.mockImplementationOnce(()=>finish({status:'cancelled',message:'OK'}));
+    (el.querySelector('.cancel-download') as HTMLButtonElement).click();expect(journal.cancel).toHaveBeenCalledOnce();await flush();fixture.detectChanges();
+    expect(el.querySelector('.download-result')?.textContent).toContain('abgebrochen');
+    expect(el.querySelector('.download-count')?.textContent).toContain('12 Messwerte');expect(el.querySelector('.cancel-download')).toBeNull();
+  });
+  it.each([
+    ['complete','abgeschlossen'],['cancelled','abgebrochen'],['disconnected','verloren'],
+    ['time-required','erforderlich'],['busy','beschäftigt'],['error','Fehler'],['clock-invalid','Ungültige'],['unsupported','nicht unterstützt'],
+  ] as const)('shows the coordinator result %s',async(status,label)=>{
+    connection.state.set('ready');connection.phase.set('ready');journal.run.mockResolvedValueOnce({status,message:'Details'});
+    const {fixture,el}=open();(el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
+    expect(el.querySelector('.download-result')?.textContent).toContain(label);
+  });
+  it('handles unexpected coordinator rejection without an unhandled promise',async()=>{
+    connection.state.set('ready');connection.phase.set('ready');journal.run.mockRejectedValueOnce(new Error('failure'));
+    const {fixture,el}=open();(el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
+    expect(el.querySelector('.download-result')?.textContent).toContain('Fehler');
+  });
+
+});
+
+
+describe('DeviceDiscovery shared journal DI',()=>{
+  it('uses the component connection and inherited application storage/history',async()=>{
+    const store=testStorage();
+    TestBed.configureTestingModule({providers:[...routes[0].providers!,store.provider]});
+    const fixture=TestBed.createComponent(DeviceDiscovery);
+    const injector=fixture.debugElement.injector;
+    const journal=injector.get(BleJournalSync) as unknown as {connection:BleConnection;storage:Co2Storage;history:Co2History};
+    expect(journal.connection).toBe(injector.get(BleConnection));
+    expect(journal.storage).toBe(TestBed.inject(Co2Storage));expect(journal.history).toBe(TestBed.inject(Co2History));
+    await TestBed.inject(Co2History).whenSettled();fixture.destroy();
   });
 });
