@@ -3,6 +3,43 @@
 Pure TypeScript implementation of `docs/ble-protocol-v1.md`. No Angular,
 Bluetooth, IndexedDB or application state dependencies. SHA-256 uses Web Crypto.
 
+## Native connection boundary
+
+`../data-access/ble-connection.ts` now implements a separate Angular handshake
+service using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
+initializes BLE, connects, reads/validates Info v1.0, subscribes to Events, then
+sends GET_STATUS and waits for the matching STATUS requestId. It is not yet
+provided/wired into the device discovery UI. A future owner must provide one
+BleConnection and the same BleScanner used by discovery in a common DI scope.
+
+Only Android is supported by the default adapter; browser connect rejects before
+scanner/native calls. All known capability subsets are valid for this handshake;
+there is no invented live/journal capability requirement for GET_STATUS.
+
+One session owns one Events assembler, a Control ID allocator (0..65534), and a
+serialized queue of at most four STATUS commands including the active command.
+Events IDs are independent. Request matching is installed before writing, and a
+write response alone never establishes readiness. Unsolicited STATUS may update
+status, but cannot complete a GET_STATUS request. Unexpected valid LIVE/batch
+messages have no import/current-reading side effects. Protocol/framing errors
+terminate the session; there are no automatic retries or reconnects.
+
+Timeouts: scanner barrier 15 s, initialize/connect 10 s each, Info/subscribe/write
+5 s each, STATUS response 5 s after write completion, cleanup caller wait 10 s.
+The existing fragment deadline is 5 s. Connect accepts an AbortSignal for the
+handshake; disconnect is explicit after readiness. Backgrounding/destruction
+cancels the session and removes local timers/listeners. Native calls cannot be
+forcibly cancelled: the session slot stays reserved while late calls settle,
+then subscription cleanup/disconnect run. A stuck native call or failed cleanup
+quarantines the slot rather than risking an old disconnect affecting a new
+connection. Caller waits remain bounded; recovery from a stuck adapter currently
+requires recreating the application. Repeated cleanup never repeats native work.
+
+BatchReceiver, FETCH/TIME_SET/ACK handling, sensor Co2Source, measurement imports,
+UI and firmware are **not connected** to this service. Existing simulator DI and
+local history are unchanged. Tests use a fake adapter and fake timers; native
+GATT/CCCD behavior, radio loss and Android lifecycle timing still require hardware.
+
 - `codec.ts`: Info, message bodies, canonical entries and bounded batch digest
   input (including contiguous sequence coverage and duplicate-ID checks).
 - `fragments.ts`: framing/CRC and one `FragmentAssembler` per connection direction.
