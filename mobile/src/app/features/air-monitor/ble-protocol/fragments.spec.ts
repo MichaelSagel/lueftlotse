@@ -6,6 +6,15 @@ const id = '00112233-4455-4677-8899-aabbccddeeff';
 const hex = (value: Uint8Array) => Array.from(value, n => n.toString(16).padStart(2, '0')).join('');
 const time = { type: 2, bootId: id, utcMs: 1n, uncertaintyMs: 0xffffffff } as const;
 describe('BLE v1 fragment assembly', () => {
+  it('pins the STATUS frames shared with firmware vector tests', () => {
+    const status = { type: 0x80, requestId: 65535, bootId: id, oldest: 1n, latest: 3n, overwrittenThrough: 0n, timeValid: 1, firstUndated: 0n, storageState: 0 } as const;
+    expect(fragmentMessage(status, 7, 'events').map(hex)).toEqual([
+      '018007000004ffff00112233445546778899aabb',
+      '018007000104ccddeeff01000000000000000300',
+      '0180070002040000000000000000000000000000',
+      '01800700030401000000000000000000b6f860e2',
+    ]);
+  });
   const assemblers: FragmentAssembler[] = [];
   const assembler = (now?: () => number) => { const a = new FragmentAssembler('control', now); assemblers.push(a); return a; };
   afterEach(() => { assemblers.forEach(a => a.dispose()); assemblers.length = 0; vi.useRealTimers(); });
