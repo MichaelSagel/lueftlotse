@@ -8,9 +8,11 @@ Bluetooth, IndexedDB or application state dependencies. SHA-256 uses Web Crypto.
 `../data-access/ble-connection.ts` now implements a separate Angular handshake
 service using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
 initializes BLE, connects, reads/validates Info v1.0, subscribes to Events, then
-sends GET_STATUS and waits for the matching STATUS requestId. It is not yet
-provided/wired into the device discovery UI. A future owner must provide one
-BleConnection and the same BleScanner used by discovery in a common DI scope.
+sends GET_STATUS and waits for the matching STATUS requestId. DeviceDiscovery provides one
+BleConnection together with the same BleScanner in its component scope. Its UI
+shows handshake progress and Info deviceId, explicitly disconnects before switching
+devices, and preserves a ready connection when collapsed. Scanning is disabled
+during connection work and while connected; disconnect first to scan again.
 
 Only Android is supported by the default adapter; browser connect rejects before
 scanner/native calls. All known capability subsets are valid for this handshake;
@@ -35,9 +37,10 @@ quarantines the slot rather than risking an old disconnect affecting a new
 connection. Caller waits remain bounded; recovery from a stuck adapter currently
 requires recreating the application. Repeated cleanup never repeats native work.
 
-BatchReceiver, FETCH/TIME_SET/ACK handling, sensor Co2Source, measurement imports,
-UI and firmware are **not connected** to this service. Existing simulator DI and
-local history are unchanged. Tests use a fake adapter and fake timers; native
+BatchReceiver, FETCH/TIME_SET/ACK handling, sensor Co2Source and measurement imports
+are **not connected** to this service. The connection UI confirms STATUS only, not
+reception of sensor measurements. Existing simulator DI and local history are
+unchanged. Tests use a fake adapter and fake timers; native
 GATT/CCCD behavior, radio loss and Android lifecycle timing still require hardware.
 
 - `codec.ts`: Info, message bodies, canonical entries and bounded batch digest

@@ -35,6 +35,7 @@ export class BleConnection {
   private readonly scanner = inject(BleScanner);
   private readonly document = inject(DOCUMENT);
   readonly state = signal<'idle' | 'connecting' | 'ready' | 'closing' | 'error'>('idle');
+  readonly phase = signal<'idle' | 'scan-stop' | 'initialize' | 'connect' | 'info' | 'subscribe' | 'status' | 'ready' | 'closing' | 'error'>('idle');
   readonly info = signal<Info | null>(null);
   readonly status = signal<Status | null>(null);
   readonly error = signal<string | null>(null);
@@ -61,20 +62,27 @@ export class BleConnection {
     const cancel = () => { void this.close(session, signal?.reason ?? new Error('Cancelled')).catch(() => {}); };
     signal?.addEventListener('abort', cancel, { once: true });
     try {
+      this.assertCurrent(session); this.phase.set('scan-stop');
       await this.operation(session, () => this.scanner.stop(), 15000);
+      this.assertCurrent(session); this.phase.set('initialize');
       await this.operation(session, () => this.adapter.initialize(), 10000);
+      this.assertCurrent(session); this.phase.set('connect');
       session.connecting = true;
       await this.operation(session, () => this.adapter.connect(id, () => {
         if (this.current(session)) void this.close(session, new Error('BLE disconnected')).catch(() => {});
       }), 10000);
+      this.assertCurrent(session); this.phase.set('info');
       const value = await this.operation(session, () => this.adapter.readInfo(id));
+      this.assertCurrent(session);
       if (value.byteLength !== 20) throw new Error('Info must be 20 bytes');
       const info = decodeInfo(new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
       this.info.set(info);
+      this.assertCurrent(session); this.phase.set('subscribe');
       session.subscribed = true; // Also clean up a subscription whose Promise completes late or fails.
       await this.operation(session, () => this.adapter.subscribe(id, value => this.receive(session, value)));
+      this.assertCurrent(session); this.phase.set('status');
       const status = await this.enqueueStatus(session);
-      this.assertCurrent(session); this.state.set('ready'); return status;
+      this.assertCurrent(session); this.phase.set('ready'); this.state.set('ready'); return status;
     } catch (error) {
       void this.close(session, error).catch(() => {});
       throw error;
@@ -161,6 +169,7 @@ export class BleConnection {
 
   private close(session: Session, reason?: unknown): Promise<void> {
     if (session.closing) return session.closing;
+    this.phase.set('closing');
     session.abort.abort(reason ?? new Error('BLE session closed'));
     session.assembler.dispose(); clearTimeout(session.request?.timer);
     session.request?.reject(session.abort.signal.reason); session.request = undefined;
@@ -177,10 +186,10 @@ export class BleConnection {
         try { await this.cleanupOperation(action); } catch (error) { errors.push(error); }
       }
       if (errors.length) {
-        this.error.set('BLE cleanup failed; session cannot be reused'); this.state.set('error');
+        this.error.set('BLE cleanup failed; session cannot be reused'); this.phase.set('error'); this.state.set('error');
         throw new Error('BLE cleanup failed');
       }
-      if (this.session === session) { this.session = undefined; this.info.set(null); this.status.set(null); if (!reason) this.state.set('idle'); }
+      if (this.session === session) { this.session = undefined; this.phase.set('idle'); this.info.set(null); this.status.set(null); if (!reason) this.state.set('idle'); }
     })();
     // disconnect has a finite wait even if an adapter fails to settle; slot remains quarantined.
     session.closing = this.cleanupOperation(() => session.cleanup!);
