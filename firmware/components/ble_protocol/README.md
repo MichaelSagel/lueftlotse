@@ -34,4 +34,5 @@ exhaustion. Firmware compilation separately checks ESP32-C3 toolchain compatibil
 
 Not verified here: real GATT reads/writes/notifications, radio MTU negotiation,
 timing on hardware, disconnect behavior, persistent identity or journal.
-The application still only logs its startup message.
+The codec remains transport-independent; the application now uses the separate
+ble_server component for the minimal NimBLE Info/GET_STATUS/STATUS handshake.
