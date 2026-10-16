@@ -35,17 +35,12 @@
       @for (point of data.points; track $index) {
         <circle [attr.cx]="point.x" [attr.cy]="point.y" r="3"><title>{{ point.label }}</title></circle>
       }
-      @if (data.singleTime) {
-        <text x="184" y="174" text-anchor="middle">{{ data.first }}</text>
-      } @else {
-        <text x="48" y="174">{{ data.first }}@if (data.multiDay) {<tspan x="48" dy="13">{{ data.firstDate }}</tspan>}</text>
-        <text x="320" y="174" text-anchor="end">{{ data.last }}@if (data.multiDay) {<tspan x="320" dy="13">{{ data.lastDate }}</tspan>}</text>
-      }
+      <text x="48" y="174">{{ data.first }}@if (data.multiDay) {<tspan x="48" dy="13">{{ data.firstDate }}</tspan>}</text>
+      <text x="320" y="174" text-anchor="end">{{ data.last }}@if (data.multiDay) {<tspan x="320" dy="13">{{ data.lastDate }}</tspan>}</text>
     </svg>
-    <p class="caption">Vorhandene Messwerte: {{ fullTime(data.firstTime) }}@if (!data.singleTime) { bis {{ fullTime(data.lastTime) }} }</p>
     <p class="caption">{{ history.rangeCount() }} Messungen im Zeitraum · {{ data.points.length }} Diagrammpunkte. Große Zeiträume werden mit Minima und Maxima verdichtet; Pausen bleiben unverbunden.</p>
   } @else {
-    <p class="empty">Vorhandene Messwerte: Keine Messungen in diesem Zeitraum.</p>
+    <p class="empty">Keine Messungen in diesem Zeitraum.</p>
   }
   <h3>Messwerte</h3>
   <div class="table-toolbar" aria-label="Tabellennavigation">

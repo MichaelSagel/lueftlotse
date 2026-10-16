@@ -48,13 +48,12 @@ export class Co2Chart {
   protected readonly chart = computed(() => {
     const entries = this.history.measurements();
     if (!entries.length) return null;
-    const firstTime = entries[0].time;
-    const lastTime = entries[entries.length - 1].time;
+    const { start: firstTime, end: lastTime } = this.history.range();
     const min = Math.floor(Math.min(...entries.map(entry => entry.ppm)) / 100) * 100;
     const max = Math.max(min + 100, Math.ceil(Math.max(...entries.map(entry => entry.ppm)) / 100) * 100);
     const points = entries.map(entry => ({
       ...entry,
-      x: firstTime === lastTime ? 184 : 48 + (entry.time - firstTime) / (lastTime - firstTime) * 272,
+      x: 48 + (entry.time - firstTime) / (lastTime - firstTime) * 272,
       y: 148 - (entry.ppm - min) / (max - min) * 120,
       label: `${this.fullTime(entry.time)}: ${entry.ppm} ppm`,
     }));
@@ -66,6 +65,6 @@ export class Co2Chart {
     });
     return { points, segments, min, max, first: this.time(firstTime), last: this.time(lastTime),
       multiDay: this.date(firstTime) !== this.date(lastTime), firstDate: this.date(firstTime), lastDate: this.date(lastTime),
-      firstTime, lastTime, singleTime: firstTime === lastTime };
+    };
   });
 }
