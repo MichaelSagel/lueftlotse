@@ -23,6 +23,22 @@ describe('DeviceDiscovery', () => {
     expect(section.hidden).toBe(true);
     expect(stop).toHaveBeenCalledOnce();
   });
+  it('handles stop errors from the stop button and collapse without unhandled rejections', async () => {
+    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
+    const fixture = TestBed.createComponent(DeviceDiscovery);
+    const scanner = fixture.debugElement.injector.get(BleScanner);
+    const stop = vi.spyOn(scanner, 'stop').mockRejectedValue(new Error('stop failed'));
+    scanner.state.set('scanning'); fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const disclosure = el.querySelector('button')!;
+    disclosure.click(); fixture.detectChanges();
+    Array.from(el.querySelectorAll('button')).find(b => b.textContent === 'Suche stoppen')!.click();
+    await Promise.resolve();
+    disclosure.click(); await Promise.resolve();
+    expect(stop).toHaveBeenCalledTimes(2);
+    stop.mockResolvedValue(); fixture.destroy();
+  });
+
   it('explains Android availability without native calls in the browser', () => {
     vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('web');
     const initialize = vi.spyOn(BleClient, 'initialize');

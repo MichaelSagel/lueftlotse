@@ -59,9 +59,11 @@ describe('BleScanner', () => {
     vi.mocked(BleClient.initialize).mockImplementation(() => new Promise<void>(resolve => { ready = resolve; }));
     const pending = scanner.start();
     await vi.waitFor(() => expect(ready).toBeDefined());
-    await scanner.stop();
+    let stopped = false;
+    const stop = scanner.stop().then(() => { stopped = true; });
+    await Promise.resolve(); expect(stopped).toBe(false); expect(scanner.busy()).toBe(true);
     ready();
-    await pending;
+    await Promise.all([pending, stop]);
     expect(BleClient.requestLEScan).not.toHaveBeenCalled();
     expect(scanner.busy()).toBe(false);
   });
@@ -70,12 +72,67 @@ describe('BleScanner', () => {
     vi.mocked(BleClient.requestLEScan).mockImplementation(() => new Promise<void>(resolve => { ready = resolve; }));
     const pending = scanner.start();
     await vi.waitFor(() => expect(ready).toBeDefined());
-    await scanner.stop();
+    let stopped = false;
+    const stop = scanner.stop().then(() => { stopped = true; });
+    await Promise.resolve(); expect(stopped).toBe(false); expect(scanner.busy()).toBe(true);
     ready();
-    await pending;
+    await Promise.all([pending, stop]);
     expect(BleClient.stopLEScan).toHaveBeenCalledOnce();
     expect(scanner.state()).toBe('done');
   });
+
+  it('shares the late-start barrier, rejects both callers on native stop failure and allows cleanup retry', async () => {
+    let ready!: () => void;
+    vi.mocked(BleClient.requestLEScan).mockImplementationOnce(async (_,callback) => {
+      result = callback; await new Promise<void>(resolve => { ready = resolve; });
+    });
+    const pending = scanner.start();
+    await vi.waitFor(() => expect(ready).toBeDefined());
+    const first = scanner.stop(); const second = scanner.stop();
+    expect(second).toBe(first);
+    const failure = new Error('late stop failed');
+    vi.mocked(BleClient.stopLEScan).mockRejectedValueOnce(failure);
+    const checks = Promise.all([expect(first).rejects.toBe(failure), expect(second).rejects.toBe(failure)]);
+    result({device:{deviceId:'stale'}} as ScanResult); expect(scanner.devices()).toEqual([]);
+    ready(); await pending; await checks;
+    expect(scanner.state()).toBe('error'); expect(scanner.busy()).toBe(false);
+    expect(BleClient.stopLEScan).toHaveBeenCalledTimes(1);
+    await scanner.stop(); await scanner.stop();
+    expect(BleClient.stopLEScan).toHaveBeenCalledTimes(2);
+    await scanner.start();
+    expect(BleClient.requestLEScan).toHaveBeenCalledTimes(2);
+  });
+
+  it('awaits native cleanup after late launch and rejects callbacks from the previous scan', async () => {
+    let launch!: () => void; let finishStop!: () => void;
+    vi.mocked(BleClient.requestLEScan).mockImplementationOnce(async (_,callback) => {
+      result=callback; await new Promise<void>(resolve=>{launch=resolve;});
+    });
+    const pending=scanner.start(); await vi.waitFor(()=>expect(launch).toBeDefined());
+    const oldCallback=result;
+    vi.mocked(BleClient.stopLEScan).mockImplementationOnce(()=>new Promise<void>(resolve=>{finishStop=resolve;}));
+    let done=false; const stopping=scanner.stop().then(()=>{done=true;});
+    launch(); await pending; await vi.waitFor(()=>expect(finishStop).toBeDefined());
+    expect(done).toBe(false); expect(scanner.busy()).toBe(true);
+    await scanner.start(); expect(BleClient.requestLEScan).toHaveBeenCalledTimes(1);
+    finishStop(); await stopping; await scanner.start();
+    oldCallback({device:{deviceId:'old'}} as ScanResult);
+    result({device:{deviceId:'new'}} as ScanResult);
+    expect(scanner.devices().map(d=>d.id)).toEqual(['new']);
+  });
+
+  it('handles background cancellation during launch and a failed background stop without rejection', async () => {
+    let ready!: () => void;
+    vi.mocked(BleClient.requestLEScan).mockImplementationOnce(()=>new Promise<void>(resolve=>{ready=resolve;}));
+    const pending=scanner.start(); await vi.waitFor(()=>expect(ready).toBeDefined());
+    vi.mocked(BleClient.stopLEScan).mockRejectedValueOnce(new Error('background stop failed'));
+    vi.spyOn(document,'hidden','get').mockReturnValue(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    ready(); await pending; await vi.waitFor(()=>expect(scanner.busy()).toBe(false));
+    expect(scanner.state()).toBe('error'); expect(BleClient.stopLEScan).toHaveBeenCalledOnce();
+    await scanner.stop(); expect(BleClient.stopLEScan).toHaveBeenCalledTimes(2);
+  });
+
   it('reports Bluetooth off without scanning', async () => {
     vi.mocked(BleClient.isEnabled).mockResolvedValue(false);
     await scanner.start();
@@ -99,7 +156,7 @@ describe('BleScanner', () => {
   it('reports a stop failure and retries cleanup before another scan', async () => {
     await scanner.start();
     vi.mocked(BleClient.stopLEScan).mockRejectedValueOnce(new Error('Stop failed'));
-    await scanner.stop();
+    await expect(scanner.stop()).rejects.toThrow('Stop failed');
     expect(scanner.state()).toBe('error');
     await scanner.start();
     expect(BleClient.stopLEScan).toHaveBeenCalledTimes(2);

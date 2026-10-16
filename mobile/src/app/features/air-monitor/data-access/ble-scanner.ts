@@ -29,21 +29,30 @@ export class BleScanner {
   private timer?: ReturnType<typeof setTimeout>;
   private nativeStarted = false;
   private cleanup?: Promise<void>;
-  private readonly onVisibility = () => { if (this.document.hidden) void this.stop(); };
+  private launch?: Promise<void>;
+  private stopOperation?: Promise<void>;
+  private destroyed = false;
+  private readonly onVisibility = () => { if (this.document.hidden) void this.stop().catch(() => {}); };
 
   constructor() {
     this.document.addEventListener('visibilitychange', this.onVisibility);
     inject(DestroyRef).onDestroy(() => {
+      this.destroyed = true;
       this.document.removeEventListener('visibilitychange', this.onVisibility);
-      void this.stop();
+      void this.stop().catch(() => {});
     });
   }
 
-  async start(): Promise<void> {
-    if (!this.available || this.busy() || this.state() === 'scanning' || this.document.hidden) return;
+  start(): Promise<void> {
+    if (this.destroyed || !this.available || this.busy() || this.state() === 'scanning' || this.document.hidden) return Promise.resolve();
+    this.starting.set(true);
+    this.launch = this.startScan().finally(() => { this.launch = undefined; this.starting.set(false); });
+    return this.launch;
+  }
+
+  private async startScan(): Promise<void> {
     const generation = ++this.generation;
     const current = () => generation === this.generation && !this.document.hidden;
-    this.starting.set(true);
     this.devices.set([]);
     this.state.set('scanning');
     try {
@@ -61,34 +70,39 @@ export class BleScanner {
         if (current()) this.receive(result);
       });
       this.nativeStarted = true;
-      if (!current()) { await this.stopNative(); return; }
-      this.timer = setTimeout(() => void this.stop(), 10_000);
+      if (!current()) return;
+      this.timer = setTimeout(() => void this.stop().catch(() => {}), 10_000);
     } catch (error) {
       if (current()) {
         const message = error instanceof Error ? error.message : String((error as { message?: string })?.message ?? error);
         this.state.set(/permission|denied/i.test(message) ? 'denied' : 'error');
       }
-      await this.stopNative();
-    } finally {
-      this.starting.set(false);
+      await this.stopNative().catch(() => {});
     }
   }
 
-  async stop(): Promise<void> {
+  /** Resolves only after an in-flight launch and its native cleanup have settled. */
+  stop(): Promise<void> {
+    if (this.stopOperation) return this.stopOperation;
     ++this.generation;
     clearTimeout(this.timer);
     if (this.state() === 'scanning') this.state.set('done');
-    await this.stopNative();
+    this.stopping.set(true);
+    const launch = this.launch;
+    this.stopOperation = (async () => {
+      if (launch) await launch;
+      await this.stopNative();
+    })().finally(() => { this.stopOperation = undefined; this.stopping.set(false); });
+    return this.stopOperation;
   }
 
   private stopNative(): Promise<void> {
     if (this.cleanup) return this.cleanup;
     if (!this.nativeStarted) return Promise.resolve();
-    this.stopping.set(true);
     this.cleanup = BleClient.stopLEScan()
       .then(() => { this.nativeStarted = false; })
-      .catch(() => { this.state.set('error'); })
-      .finally(() => { this.cleanup = undefined; this.stopping.set(false); });
+      .catch(error => { this.state.set('error'); throw error; })
+      .finally(() => { this.cleanup = undefined; });
     return this.cleanup;
   }
 

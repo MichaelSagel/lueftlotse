@@ -11,7 +11,7 @@ import { BleScanner } from '../../data-access/ble-scanner';
         <p>BLE-Geräte in der Nähe suchen. Die Simulation läuft unabhängig weiter.</p>
         <button type="button" (click)="scanner.start()" [disabled]="scanner.busy() || scanner.state() === 'scanning'">Geräte suchen</button>
         @if (scanner.state() === 'scanning') {
-          <button type="button" (click)="scanner.stop()">Suche stoppen</button>
+          <button type="button" (click)="stopScan()">Suche stoppen</button>
         }
         <p role="status">{{ scanner.message() }}</p>
         <ul>
@@ -38,8 +38,11 @@ import { BleScanner } from '../../data-access/ble-scanner';
 export class DeviceDiscovery {
   protected readonly scanner = inject(BleScanner);
   protected readonly expanded = signal(false);
+  protected stopScan(): void {
+    void this.scanner.stop().catch(() => {}); // Scanner exposes the failure through its state/message.
+  }
   protected toggle(): void {
     this.expanded.update(value => !value);
-    if (!this.expanded()) void this.scanner.stop();
+    if (!this.expanded()) this.stopScan();
   }
 }
