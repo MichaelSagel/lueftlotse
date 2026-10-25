@@ -76,7 +76,7 @@ describe('BleConnection handshake', () => {
   });
   it.each(['length','version','uuid','capabilities'])('rejects invalid Info: %s', async kind => {
     const bytes = encodeInfo(uuid);
-    if (kind === 'version') bytes[1] = 1;
+    if (kind === 'version') bytes[1] = 2;
     if (kind === 'uuid') bytes[8] = 0;
     if (kind === 'capabilities') bytes[19] = 128;
     vi.mocked(adapter.readInfo).mockResolvedValue(view(kind === 'length' ? bytes.subarray(0,19) : bytes));
@@ -88,6 +88,12 @@ describe('BleConnection handshake', () => {
     const buffer = new Uint8Array(30); buffer.set(encodeInfo(uuid,0),5);
     vi.mocked(adapter.readInfo).mockResolvedValue(new DataView(buffer.buffer,5,20));
     await connection.connect('address'); expect(connection.info()?.capabilities).toBe(0);
+  });
+  it.each([[0, 0], [0, 15], [1, 0], [1, 16], [1, 31]] as const)('retains the STATUS handshake with Info v1.%s capabilities=%s', async (minor, capabilities) => {
+    vi.mocked(adapter.readInfo).mockResolvedValue(view(encodeInfo(uuid, capabilities, minor)));
+    await connection.connect('address');
+    expect(connection.info()).toMatchObject({ major: 1, minor, capabilities });
+    expect(connection.state()).toBe('ready');
   });
   it('ignores foreign request IDs and unsolicited STATUS until the matching response', async () => {
     vi.mocked(adapter.write).mockImplementation(async () => { emit(status(17)); emit(status(65535)); });

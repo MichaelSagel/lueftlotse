@@ -6,6 +6,8 @@ export const GATT = {
   control: '9c6b1002-7a3e-4d9f-8b52-6e210f42a001',
   events: '9c6b1003-7a3e-4d9f-8b52-6e210f42a001',
 } as const;
+export const LIVE_SAMPLE_CAPABILITY = 0x0010;
+export interface Info { major: 1; minor: 0 | 1; deviceId: string; capabilities: number; }
 const recordFields = { sequence: 'sequence', measurementId: 'uuid', bootId: 'uuid', segmentId: 'uuid', uptimeMs: 'u64' } as const;
 const entries = {
   1: { ...recordFields, utcMs: 'utc', ppm: 'ppm' },
@@ -31,6 +33,8 @@ const schemas = {
   0x87: { requestId: 'request', batchId: 'uuid' },
   0x88: { fromSequence: 'sequence', toSequence: 'sequence', reason: 'reason' },
   0x89: { requestId: 'request', batchId: 'uuid' },
+  // sampleCounter is a boot-local preview counter, not a durable journal sequence.
+  0x8a: { bootId: 'uuid', sampleCounter: 'u64', uptimeMs: 'u64', ppm: 'ppm' },
   0xff: { requestId: 'request', code: 'error' },
 } as const;
 export type MessageType = keyof typeof schemas;
@@ -81,6 +85,7 @@ function checkMessage(message: Message): void {
     requireProtocol(message.firstUndated === 0n || (message.firstUndated >= message.oldest && message.firstUndated <= message.latest), 'Invalid pending sequence');
   }
   if (message.type === 0x86) requireProtocol(message.entry.tag === 1, 'LIVE requires READY');
+  if (message.type === 0x8a) requireProtocol(message.sampleCounter > 0n, 'Sample counter starts at one');
 }
 export function encodeBody(message: Message): Uint8Array {
   requireProtocol(isMessageType(message.type), 'Unknown message type');
@@ -101,18 +106,32 @@ export function decodeBody(type: number, body: Uint8Array): Message {
   }
   reader.end(); checkMessage(message); return message;
 }
-export function encodeInfo(deviceId: string, capabilities = 15): Uint8Array {
-  requireProtocol(Number.isInteger(capabilities) && capabilities >= 0 && capabilities <= 15, 'Unknown capability bits');
-  const writer = new Writer(20);
-  writer.put('u8', 1); writer.put('u8', 0); writer.put('uuid', deviceId); writer.put('u16', capabilities); return writer.bytes;
+function checkInfoVersion(major: number, minor: number, capabilities: number): void {
+  requireProtocol(major === 1 && (minor === 0 || minor === 1), 'Unsupported Info version');
+  const mask = minor === 0 ? 0x000f : 0x001f;
+  requireProtocol(Number.isInteger(capabilities) && capabilities >= 0 && capabilities <= mask, 'Unknown capability bits');
 }
-export function decodeInfo(bytes: Uint8Array): { major: 1; minor: 0; deviceId: string; capabilities: number } {
+/** Stateless wire codecs do not negotiate. Future LIVE_SAMPLE users must check this first. */
+export function supportsLiveSample(info: Info): boolean {
+  try {
+    checkInfoVersion(info.major, info.minor, info.capabilities);
+    encodeFields({ deviceId: 'uuid' }, info);
+    return info.minor === 1 && (info.capabilities & LIVE_SAMPLE_CAPABILITY) !== 0;
+  } catch { return false; }
+}
+// Defaults deliberately retain v1.0 wire behavior for existing callers.
+export function encodeInfo(deviceId: string, capabilities = 15, minor: 0 | 1 = 0): Uint8Array {
+  checkInfoVersion(1, minor, capabilities);
+  const writer = new Writer(20);
+  writer.put('u8', 1); writer.put('u8', minor); writer.put('uuid', deviceId); writer.put('u16', capabilities); return writer.bytes;
+}
+export function decodeInfo(bytes: Uint8Array): Info {
   requireProtocol(bytes.length === 20, 'Info must be 20 bytes');
   const reader = new Reader(bytes);
-  requireProtocol(reader.get('u8') === 1 && reader.get('u8') === 0, 'Unsupported Info version');
+  const major = reader.get('u8'); const minor = reader.get('u8');
   const deviceId = reader.get('uuid'); const capabilities = reader.get('u16');
-  requireProtocol((capabilities & ~15) === 0, 'Unknown capability bits');
-  reader.end(); return { major: 1, minor: 0, deviceId, capabilities };
+  checkInfoVersion(major, minor, capabilities);
+  reader.end(); return { major: 1, minor: minor as 0 | 1, deviceId, capabilities };
 }
 
 export interface BatchHeader { batchId: string; afterSequence: bigint; throughSequence: bigint; count: number; }

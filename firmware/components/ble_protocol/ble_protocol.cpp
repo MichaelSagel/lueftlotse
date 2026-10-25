@@ -18,6 +18,39 @@ uint64_t get(const uint8_t *p, size_t n) {
 bool uuid(const Uuid &u) {
   return (u.bytes[6] & 0xf0) == 0x40 && (u.bytes[8] & 0xc0) == 0x80;
 }
+bool valid(const Info &i) {
+  if (i.minor > 1 || !uuid(i.device_id))
+    return false;
+  const uint16_t mask = i.minor == 0 ? 0x000f : 0x001f;
+  return (i.capabilities & ~mask) == 0;
+}
+bool valid(const LiveSample &s) {
+  return uuid(s.boot_id) && s.sample_counter != 0 && s.ppm >= 1 &&
+         s.ppm <= 100000;
+}
+// Body sizes are wire sizes; never sizeof(C++ structs), which may have padding.
+size_t logical_size(Type type) {
+  switch (type) {
+  case Type::get_status: return 4;
+  case Type::status: return 56;
+  case Type::live_sample: return 40;
+  default: return 0;
+  }
+}
+void write_live_sample(const LiveSample &s, uint8_t *b) {
+  copy(b, s.boot_id.bytes, 16);
+  put(b + 16, s.sample_counter, 8);
+  put(b + 24, s.uptime_ms, 8);
+  put(b + 32, s.ppm, 4);
+}
+LiveSample read_live_sample(const uint8_t *b) {
+  LiveSample s;
+  copy(s.boot_id.bytes, b, 16);
+  s.sample_counter = get(b + 16, 8);
+  s.uptime_ms = get(b + 24, 8);
+  s.ppm = uint32_t(get(b + 32, 4));
+  return s;
+}
 bool valid(const Status &s) {
   return uuid(s.boot_id) && s.time_valid <= 1 && s.storage_state <= 1 &&
          ((s.oldest == 0 && s.latest == 0) ||
@@ -68,36 +101,44 @@ uint32_t crc32(const uint8_t *p, size_t n) {
   return crc ^ 0xffffffff;
 }
 bool encode_info(const Info &i, uint8_t (&out)[20]) {
-  if (!uuid(i.device_id) || (i.capabilities & 0xfff0))
+  if (!valid(i))
     return false;
   out[0] = 1;
-  out[1] = 0;
+  out[1] = i.minor;
   copy(out + 2, i.device_id.bytes, 16);
   put(out + 18, i.capabilities, 2);
   return true;
 }
 bool decode_info(const uint8_t *b, size_t n, Info &out) {
-  if (!b || n != 20 || b[0] != 1 || b[1] != 0)
+  if (!b || n != 20 || b[0] != 1)
     return false;
   Info i;
+  i.minor = b[1];
   copy(i.device_id.bytes, b + 2, 16);
   i.capabilities = uint16_t(get(b + 18, 2));
-  if (!uuid(i.device_id) || (i.capabilities & 0xfff0))
+  if (!valid(i))
     return false;
   out = i;
   return true;
 }
+bool supports_live_sample(const Info &i) {
+  return valid(i) && i.minor == 1 && (i.capabilities & live_sample_capability);
+}
 bool fragment(const Message &m, Frames &out) {
   out.count = 0;
-  if (m.type != Type::get_status && m.type != Type::status)
+  const size_t total = logical_size(m.type);
+  if (!total)
     return false;
   if ((m.type == Type::get_status && m.message_id == 65535) ||
-      (m.type == Type::status && !valid(m.status)))
+      (m.type == Type::status && !valid(m.status)) ||
+      (m.type == Type::live_sample && !valid(m.live_sample)))
     return false;
   uint8_t b[56]{};
-  size_t n = m.type == Type::status ? 52 : 0;
-  if (n)
+  size_t n = total - 4;
+  if (m.type == Type::status)
     write_status(m.status, b);
+  else if (m.type == Type::live_sample)
+    write_live_sample(m.live_sample, b);
   put(b + n, message_crc(m.type, m.message_id, b, n), 4);
   n += 4;
   out.count = (n + 13) / 14;
@@ -134,8 +175,8 @@ Result Assembler::push(const uint8_t *f, size_t n, uint64_t now, Message &out) {
   if (!f || n < 7 || n > 20 || f[0] != 1 || f[1] != uint8_t(expected_))
     return fail(Result::invalid);
   const auto id = uint16_t(get(f + 2, 2));
-  const size_t total = expected_ == Type::get_status ? 4 : 56;
-  if (expected_ != Type::get_status && expected_ != Type::status)
+  const size_t total = logical_size(expected_);
+  if (!total)
     return fail(Result::invalid);
   if (expected_ == Type::get_status && id == 65535)
     return fail(Result::invalid);
@@ -171,6 +212,10 @@ Result Assembler::push(const uint8_t *f, size_t n, uint64_t now, Message &out) {
   if (expected_ == Type::status) {
     m.status = read_status(buffer_);
     if (!valid(m.status))
+      return fail(Result::invalid);
+  } else if (expected_ == Type::live_sample) {
+    m.live_sample = read_live_sample(buffer_);
+    if (!valid(m.live_sample))
       return fail(Result::invalid);
   }
   out = m;

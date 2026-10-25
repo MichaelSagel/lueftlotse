@@ -1,0 +1,81 @@
+{
+  "infoVectors": [
+    {
+      "minor": 0,
+      "capabilities": 0,
+      "hex": "010000112233445546778899aabbccddeeff0000"
+    },
+    {
+      "minor": 0,
+      "capabilities": 15,
+      "hex": "010000112233445546778899aabbccddeeff0f00"
+    },
+    {
+      "minor": 1,
+      "capabilities": 0,
+      "hex": "010100112233445546778899aabbccddeeff0000"
+    },
+    {
+      "minor": 1,
+      "capabilities": 15,
+      "hex": "010100112233445546778899aabbccddeeff0f00"
+    },
+    {
+      "minor": 1,
+      "capabilities": 16,
+      "hex": "010100112233445546778899aabbccddeeff1000"
+    },
+    {
+      "minor": 1,
+      "capabilities": 31,
+      "hex": "010100112233445546778899aabbccddeeff1f00"
+    }
+  ],
+  "liveSampleVectors": [
+    {
+      "name": "minimum",
+      "bootId": "00112233-4455-4677-8899-aabbccddeeff",
+      "sampleCounter": "1",
+      "uptimeMs": "0",
+      "ppm": 1,
+      "messageId": 0,
+      "body": "00112233445546778899aabbccddeeff0100000000000000000000000000000001000000",
+      "logical": "00112233445546778899aabbccddeeff01000000000000000000000000000000010000001f266e0a",
+      "frames": [
+        "018a0000000300112233445546778899aabbccdd",
+        "018a00000103eeff010000000000000000000000",
+        "018a0000020300000000010000001f266e0a"
+      ]
+    },
+    {
+      "name": "above_js_safe_integer",
+      "bootId": "00112233-4455-4677-8899-aabbccddeeff",
+      "sampleCounter": "9007199254740993",
+      "uptimeMs": "72623859790382856",
+      "ppm": 650,
+      "messageId": 4660,
+      "body": "00112233445546778899aabbccddeeff010000000000200008070605040302018a020000",
+      "logical": "00112233445546778899aabbccddeeff010000000000200008070605040302018a02000045ebd9b5",
+      "frames": [
+        "018a3412000300112233445546778899aabbccdd",
+        "018a34120103eeff010000000000200008070605",
+        "018a34120203040302018a02000045ebd9b5"
+      ]
+    },
+    {
+      "name": "uint64_max",
+      "bootId": "00112233-4455-4677-8899-aabbccddeeff",
+      "sampleCounter": "18446744073709551615",
+      "uptimeMs": "18446744073709551615",
+      "ppm": 100000,
+      "messageId": 65535,
+      "body": "00112233445546778899aabbccddeeffffffffffffffffffffffffffffffffffa0860100",
+      "logical": "00112233445546778899aabbccddeeffffffffffffffffffffffffffffffffffa0860100b91bb393",
+      "frames": [
+        "018affff000300112233445546778899aabbccdd",
+        "018affff0103eeffffffffffffffffffffffffff",
+        "018affff0203ffffffffa0860100b91bb393"
+      ]
+    }
+  ]
+}

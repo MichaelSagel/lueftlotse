@@ -61,7 +61,9 @@ bool eq(const uint8_t *b, size_t n, const char *hex) {
       return false;
   return true;
 }
+#include "live_sample_tests.hpp"
 extern "C" void run_tests() {
+  test_live_sample();
   uint8_t info_bytes[20];
   unhex("010000112233445546778899aabbccddeeff0f00", info_bytes);
   Info info;
@@ -82,7 +84,7 @@ extern "C" void run_tests() {
   info_bytes[0] = 2;
   CHECK(!decode_info(info_bytes, 20, info));
   info_bytes[0] = 1;
-  info_bytes[1] = 1;
+  info_bytes[1] = 2;
   CHECK(!decode_info(info_bytes, 20, info));
   info_bytes[1] = 0;
   info_bytes[8] = 0x16;
@@ -222,7 +224,7 @@ extern "C" void run_tests() {
   CHECK(fragment(request, f));
   CHECK(control.push(f.items[0].bytes, f.items[0].size, 0, out) ==
         Result::reused_id);
-  print("PASS: BLE v1 Info/GET_STATUS/STATUS vectors, CRC, fragments, limits "
+  print("PASS: BLE v1.0/v1.1 Info/GET_STATUS/STATUS/LIVE_SAMPLE vectors, CRC, fragments, limits "
         "and IDs\n");
   finish(true);
 }

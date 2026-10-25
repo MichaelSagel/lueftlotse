@@ -7,7 +7,7 @@ Bluetooth, IndexedDB or application state dependencies. SHA-256 uses Web Crypto.
 
 `../data-access/ble-connection.ts` now implements a separate Angular handshake
 service using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
-initializes BLE, connects, reads/validates Info v1.0, subscribes to Events, then
+initializes BLE, connects, reads/validates Info v1.0/v1.1, subscribes to Events, then
 sends GET_STATUS and waits for the matching STATUS requestId. DeviceDiscovery provides one
 BleConnection together with the same BleScanner in its component scope. Its UI
 shows handshake progress and Info deviceId, explicitly disconnects before switching
@@ -176,9 +176,13 @@ must match the stored receipt; a fresh batchId with identical entries is also sa
 The 30-second deadline stops after successful reception/digest validation; database
 commit has no arbitrary timeout, but remains cancellable until commit completes.
 
-Info v1.0 capabilities is a bitmask: any subset of known bits 0x000F (including
-zero) is accepted; unknown bits are rejected. Required operation capabilities are
-checked above this codec. UUIDs, including batchId, are v4 with the RFC variant.
+Info v1.0 accepts capability subsets of 0x000F; v1.1 accepts subsets of 0x001F,
+including zero in both versions. Unknown versions/bits are rejected.
+`encodeInfo(deviceId, capabilities, minor)` retains minor=0 by default.
+Required operation capabilities are checked above the wire codec.
+`supportsLiveSample(info)` checks valid Info v1.1 plus bit 0x0010 for future
+preview consumers; LIVE_READY's bit 0 does not grant LIVE_SAMPLE.
+UUIDs, including batchId, are v4 with the RFC variant.
 READY, TIME_SET and TIME_ACCEPTED share the inclusive UTC range
 0001-01-01T00:00:00.000Z .. 9999-12-31T23:59:59.999Z, or bigint Unix milliseconds
 -62135596800000n .. 253402300799999n. Zero and pre-1970 times are valid encodings.
@@ -187,3 +191,21 @@ checks; no clock-accuracy threshold is invented here.
 
 Tests contain literal wire/CRC vectors and two SHA-256 vectors computed independently
 with Node `crypto.createHash`, as well as the standard CRC check for `123456789`.
+
+## LIVE_SAMPLE codec-only extension
+
+Type 0x8A: bootId:uuid, sampleCounter:u64, uptimeMs:u64, ppm:u32.
+The body is exactly 36 bytes; with CRC it is 40 bytes in three 20/20/18-byte
+ATT values. The frame version is still major=1, not minor=1. sampleCounter is
+1..2^64-1 per boot and is not a durable journal sequence. uptimeMs allows zero.
+Both u64 fields use bigint; ppm remains 1..100000. Preview has no UTC,
+measurementId, persistence, import, ACK or cursor semantics.
+Shared Info/body/CRC/frame fixtures live in `docs/test-vectors/ble-live-sample-v1.1.json`
+and are consumed by both C++ and `live-sample.spec.ts`.
+
+Version/capability audit: encodeInfo/decodeInfo use version-specific masks;
+fragment headers continue checking major=1; journal capability 0x000A is unchanged.
+The handshake test's unsupported minor is now 2, with explicit tests for both
+supported minors. The existing UI error wording mentioning v1.0 is presentation,
+not a version check, and is unchanged in this codec-only step. BLE publication,
+UI source selection, message consumers and storage are not added by this extension.
