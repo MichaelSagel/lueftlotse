@@ -62,7 +62,9 @@ bool eq(const uint8_t *b, size_t n, const char *hex) {
   return true;
 }
 #include "live_sample_tests.hpp"
+#include "preview_tests.hpp"
 extern "C" void run_tests() {
+  preview_test::run();
   test_live_sample();
   uint8_t info_bytes[20];
   unhex("010000112233445546778899aabbccddeeff0f00", info_bytes);

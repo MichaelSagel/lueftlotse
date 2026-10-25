@@ -1,4 +1,5 @@
 #include "scd41.hpp"
+#include "ble_server.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,7 @@ void wait_ms(uint32_t ms) {
 bool checked(esp_err_t error, const char *operation) {
   if (error == ESP_OK)
     return true;
+  invalidate_co2_sample();
   ESP_LOGE(tag, "%s: %s (0x%x)", operation, esp_err_to_name(error),
            unsigned(error));
   return false;
@@ -48,6 +50,7 @@ bool command(i2c_master_dev_handle_t device, uint16_t value) {
   const esp_err_t error =
       i2c_master_transmit(device, bytes, sizeof(bytes), timeout_ms);
   if (error != ESP_OK) {
+    invalidate_co2_sample();
     ESP_LOGE(tag, "Command 0x%04x: %s (0x%x)", unsigned(value),
              esp_err_to_name(error), unsigned(error));
     return false;
@@ -61,8 +64,10 @@ bool read_words(i2c_master_dev_handle_t device, uint16_t cmd,
     return false;
   wait_ms(1);
   uint8_t bytes[9]; // Largest response: three words and their CRCs.
-  if (count > sizeof(bytes) / 3)
+  if (count > sizeof(bytes) / 3) {
+    invalidate_co2_sample();
     return false;
+  }
   if (!checked(i2c_master_receive(device, bytes, count * 3, timeout_ms),
                "Read response"))
     return false;
@@ -70,6 +75,7 @@ bool read_words(i2c_master_dev_handle_t device, uint16_t cmd,
     const uint16_t word = (uint16_t(bytes[3 * i]) << 8) | bytes[3 * i + 1];
     const uint8_t expected = word_crc(word);
     if (expected != bytes[3 * i + 2]) {
+      invalidate_co2_sample();
       ESP_LOGE(tag, "CRC error: command=0x%04x word=%u expected=0x%02x got=0x%02x",
                unsigned(cmd), unsigned(i), unsigned(expected),
                unsigned(bytes[3 * i + 2]));
@@ -93,7 +99,7 @@ void measure(i2c_master_dev_handle_t device) {
            unsigned(serial[1]), unsigned(serial[2]));
   if (!command(device, 0x21b1))
     return;
-  ESP_LOGI(tag, "Periodic measurement started (5 s interval), monitor only");
+  ESP_LOGI(tag, "Periodic measurement started (5 s interval), monitor + BLE preview");
   unsigned not_ready_seconds = 0;
   for (;;) {
     wait_ms(1000);
@@ -102,6 +108,7 @@ void measure(i2c_master_dev_handle_t device) {
       continue;
     if ((ready & 0x07ff) == 0) {
       if (++not_ready_seconds >= 30) {
+        invalidate_co2_sample();
         ESP_LOGW(tag, "No measurement ready for at least 30 successful polls");
         not_ready_seconds = 0;
       }
@@ -112,9 +119,12 @@ void measure(i2c_master_dev_handle_t device) {
     if (!read_words(device, 0xec05, sample, 3))
       continue; // Discard the entire response on any CRC/transport error.
     if (sample[0] == 0) {
+      invalidate_co2_sample();
       ESP_LOGW(tag, "Invalid CO2 sample (0 ppm); discarded");
       continue;
     }
+    if (!publish_co2_sample(sample[0]))
+      ESP_LOGE(tag, "BLE sample counter exhausted; preview disabled until reboot");
     const double temperature = -45.0 + 175.0 * sample[1] / 65535.0;
     const double humidity = 100.0 * sample[2] / 65535.0;
     ESP_LOGI(tag, "CO2=%u ppm, temperature=%.2f C, humidity=%.2f %%RH [accuracy unverified]",

@@ -20,7 +20,7 @@ foreach ($v in $fixtures.liveSampleVectors) {
 }
 $header += '};'
 $header | Set-Content -Encoding ascii (Join-Path $out 'shared-live-vectors.hpp')
-& (Join-Path $ToolchainBin 'riscv32-esp-elf-g++.exe') -std=c++17 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-exceptions -fno-rtti -march=rv32im -mabi=ilp32 -mno-relax -msmall-data-limit=0 -nostdlib "-I$firmware/components/ble_protocol/include" "-I$out" (Join-Path $firmware 'components/ble_protocol/ble_protocol.cpp') (Join-Path $PSScriptRoot 'vectors.cpp') (Join-Path $PSScriptRoot 'start.S') "-T$PSScriptRoot/link.ld" -lgcc -o $elf
+& (Join-Path $ToolchainBin 'riscv32-esp-elf-g++.exe') -std=c++17 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-exceptions -fno-rtti -march=rv32im -mabi=ilp32 -mno-relax -msmall-data-limit=0 -nostdlib "-I$firmware/components/ble_protocol/include" "-I$firmware/components/ble_server" "-I$out" (Join-Path $firmware 'components/ble_protocol/ble_protocol.cpp') (Join-Path $firmware 'components/ble_server/live_preview.cpp') (Join-Path $PSScriptRoot 'vectors.cpp') (Join-Path $PSScriptRoot 'start.S') "-T$PSScriptRoot/link.ld" -lgcc -o $elf
 if ($LASTEXITCODE -ne 0) { throw 'Vector test compilation failed' }
 $process = New-Object System.Diagnostics.Process
 $process.StartInfo.FileName = $Qemu

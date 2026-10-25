@@ -15,12 +15,14 @@ fresh IDs on every attempt, without wrap; Control reserves 65535.
 Only the three implemented message types are accepted, with exact lengths/counts.
 Info has no CRC or framing, as specified.
 
-Info defaults to minor=0/capabilities=0, preserving the running v1.0 server.
+Info defaults to minor=0/capabilities=0 for v1.0 callers. The NimBLE server
+explicitly sets minor=1/capabilities=0x0010 for its SCD41 preview.
 Minor 0 accepts subsets of 0x000F; minor 1 accepts subsets of 0x001F.
 Unknown minors/major/capability bits are rejected. `supports_live_sample(info)`
 requires valid Info v1.1 with bit 0x0010; bit 0 (LIVE_READY) does not grant preview.
-The wire codec has no negotiated session state: future transport code must use
-this helper before publishing/using LIVE_SAMPLE. Existing BLE sending is unchanged.
+The wire codec has no negotiated session state: a receiver must use this helper
+before using LIVE_SAMPLE. A publisher must advertise the matching Info version
+and capability, as the NimBLE server does.
 Frame major remains 1. `Assembler(Type::live_sample)` is a pure codec test path,
 not a second receiver to be attached alongside an existing session assembler.
 
@@ -56,4 +58,6 @@ uint64 boundaries, bad fields with valid CRC, corruption, fragment order and exp
 Not verified here: real GATT reads/writes/notifications, radio MTU negotiation,
 timing on hardware, disconnect behavior, persistent identity or journal.
 The codec remains transport-independent; the application now uses the separate
-ble_server component for the minimal NimBLE Info/GET_STATUS/STATUS handshake.
+ble_server component for the NimBLE Info/GET_STATUS/STATUS handshake and SCD41
+LIVE_SAMPLE preview. The same QEMU runner also tests its production scheduler;
+see ../ble_server/README.md for the transport rules and coverage.

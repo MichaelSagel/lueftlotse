@@ -1,9 +1,12 @@
 #include "ble_server.hpp"
 #include "ble_protocol.hpp"
+#include "live_preview.hpp"
 #include "bootloader_random.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
@@ -29,10 +32,17 @@ uint8_t own_addr_type{};
 uint16_t connection = BLE_HS_CONN_HANDLE_NONE;
 uint16_t events_handle{};
 bool subscribed{}, closing{};
-// 32-bit counter allows checking exhaustion before conversion, never wraps u16.
-uint32_t next_event_id{};
-protocol::Frames pending;
-size_t next_frame{};
+preview::Session tx;
+// Boot-lifetime state: never reset on BLE disconnect, resubscribe or host reset.
+portMUX_TYPE sample_lock = portMUX_INITIALIZER_UNLOCKED;
+preview::SampleMailbox samples;
+
+preview::SampleSnapshot sample_snapshot() {
+  portENTER_CRITICAL(&sample_lock);
+  const auto snapshot = samples.snapshot();
+  portEXIT_CRITICAL(&sample_lock);
+  return snapshot;
+}
 
 void require_nimble(int rc) {
   if (rc)
@@ -72,15 +82,11 @@ void load_identity() {
   ESP_ERROR_CHECK(size == 16 && valid_uuid(info.device_id)
                       ? ESP_OK
                       : ESP_ERR_INVALID_STATE);
-  info.capabilities =
-      0; // No live, journal, clock synchronization or batch ACK.
-}
-void discard_pending() {
-  pending.count = 0;
-  next_frame = 0;
+  info.minor = 1;
+  info.capabilities = protocol::live_sample_capability;
 }
 void close_connection() {
-  discard_pending();
+  tx.fail();
   if (connection == BLE_HS_CONN_HANDLE_NONE || closing)
     return;
   closing = true;
@@ -90,17 +96,6 @@ void close_connection() {
     // Do not continue a session with partial delivery or exhausted IDs.
     ble_hs_sched_reset(rc);
   }
-}
-bool queue_status(uint16_t request_id) {
-  if (!subscribed || closing || pending.count || next_event_id > UINT16_MAX)
-    return false;
-  protocol::Message message;
-  message.type = protocol::Type::status;
-  message.message_id = uint16_t(next_event_id++);
-  message.status.request_id = request_id;
-  message.status.boot_id = boot_id;
-  // Zero-initialized bounds: empty journal, time unknown, storage OK.
-  return protocol::fragment(message, pending);
 }
 int access(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt *ctxt, void *) {
   if (conn != connection || closing)
@@ -130,14 +125,13 @@ int access(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt *ctxt, void *) {
   if (result != protocol::Result::complete)
     return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
   // Even rejected commands consume their ID: retry with a fresh messageId.
-  if (next_event_id > UINT16_MAX) {
-    close_connection();
-    return BLE_ATT_ERR_INSUFFICIENT_RES;
-  }
   if (!subscribed)
     return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
-  if (!queue_status(message.message_id))
+  if (!tx.queue_status(message.message_id)) {
+    if (tx.needs_disconnect())
+      close_connection();
     return BLE_ATT_ERR_INSUFFICIENT_RES;
+  }
   // ATT response only accepts the command. Host timer sends the separate
   // STATUS.
   (void)attr;
@@ -146,23 +140,25 @@ int access(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt *ctxt, void *) {
 void on_tick(ble_npl_event *) {
   if (control.expire(now_ms()))
     ESP_LOGW(tag, "Control fragment assembly expired");
-  if (connection != BLE_HS_CONN_HANDLE_NONE && subscribed && !closing &&
-      pending.count) {
-    const auto &frame = pending.items[next_frame];
-    os_mbuf *buffer = ble_hs_mbuf_from_flat(frame.bytes, frame.size);
-    if (!buffer) {
-      ESP_LOGE(tag, "No notification buffer");
-      close_connection();
-    } else {
-      // NimBLE consumes buffer even on failure; do not free it here.
-      int rc = ble_gatts_notify_custom(connection, events_handle, buffer);
-      if (rc) {
-        ESP_LOGE(tag, "Notification failed: %d", rc);
+  if (connection != BLE_HS_CONN_HANDLE_NONE && subscribed && !closing) {
+    const auto *frame = tx.next(sample_snapshot());
+    if (frame) {
+      os_mbuf *buffer = ble_hs_mbuf_from_flat(frame->bytes, frame->size);
+      if (!buffer) {
+        ESP_LOGE(tag, "No notification buffer");
         close_connection();
-      } else if (++next_frame == pending.count) {
-        discard_pending();
+      } else {
+        // Consumes buffer even on failure. NOTIFY_TX is called synchronously in
+        // this IDF version; an error callback may close the session before return.
+        const int rc = ble_gatts_notify_custom(connection, events_handle, buffer);
+        if (!closing)
+          tx.sent(rc == 0, sample_snapshot());
+        if (rc)
+          ESP_LOGE(tag, "Notification failed: %d", rc);
       }
     }
+    if (tx.needs_disconnect())
+      close_connection();
   }
   require_nimble(ble_npl_callout_reset(&tick, ble_npl_time_ms_to_ticks32(50)));
 }
@@ -210,16 +206,15 @@ int gap_event(ble_gap_event *event, void *) {
     connection = event->connect.conn_handle;
     subscribed = false;
     closing = false;
-    discard_pending();
+    tx.connect(boot_id);
     control.reset_connection();
-    next_event_id = 0;
     ESP_LOGI(tag, "Connected");
     // No advertising while connected; Kconfig limits host connections to one.
     break;
   case BLE_GAP_EVENT_DISCONNECT:
     if (event->disconnect.conn.conn_handle != connection)
       break;
-    discard_pending();
+    tx.disconnect();
     subscribed = false;
     closing = false;
     connection = BLE_HS_CONN_HANDLE_NONE;
@@ -230,8 +225,8 @@ int gap_event(ble_gap_event *event, void *) {
     if (event->subscribe.conn_handle == connection &&
         event->subscribe.attr_handle == events_handle) {
       subscribed = event->subscribe.cur_notify != 0;
-      // If a partial STATUS was in flight, do not resume it on resubscribe.
-      if (!subscribed && pending.count)
+      tx.subscribe(subscribed);
+      if (tx.needs_disconnect())
         close_connection();
     }
     break;
@@ -261,7 +256,7 @@ int gap_event(ble_gap_event *event, void *) {
 }
 void on_reset(int reason) {
   ESP_LOGE(tag, "NimBLE host reset: %d", reason);
-  discard_pending();
+  tx.disconnect();
   connection = BLE_HS_CONN_HANDLE_NONE;
   subscribed = false;
   closing = false;
@@ -278,6 +273,19 @@ void host_task(void *) {
   nimble_port_freertos_deinit();
 }
 } // namespace
+
+bool publish_co2_sample(uint32_t ppm) {
+  const uint64_t uptime_ms = now_ms();
+  portENTER_CRITICAL(&sample_lock);
+  const bool accepted = samples.publish(ppm, uptime_ms);
+  portEXIT_CRITICAL(&sample_lock);
+  return accepted;
+}
+void invalidate_co2_sample() {
+  portENTER_CRITICAL(&sample_lock);
+  samples.invalidate();
+  portEXIT_CRITICAL(&sample_lock);
+}
 
 void start_ble_server() {
   load_identity();
