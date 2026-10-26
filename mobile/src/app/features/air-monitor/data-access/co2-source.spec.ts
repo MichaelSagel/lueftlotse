@@ -24,7 +24,7 @@ describe('CO2 source DI', () => {
       start: () => state.set({ status: 'running', session: state().session + 1 }),
       stop: () => state.set({ ...state(), status: 'stopped' }),
     };
-    TestBed.configureTestingModule({ imports: [AirMonitorPage], providers: [provideRouter([]), testStorage().provider, Co2History, { provide: CO2_SOURCE, useValue: source }] });
+    TestBed.configureTestingModule({ imports: [AirMonitorPage], providers: [provideRouter([]), ...routes[0].providers!, testStorage().provider, { provide: CO2_SOURCE, useValue: source }] });
     const fixture = TestBed.createComponent(AirMonitorPage);
     fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;

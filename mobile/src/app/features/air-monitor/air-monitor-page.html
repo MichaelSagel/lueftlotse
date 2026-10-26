@@ -2,8 +2,13 @@
   <header>
     <p class="eyebrow">RAUMLUFT IM BLICK</p>
     <h1>Lüftlotse</h1>
-    <span class="badge">Simulator</span>
+    <span class="badge">{{ source.selected() === 'simulator' ? 'Simulator' : 'Sensor' }}</span>
   </header>
+  <fieldset class="source-picker">
+    <legend>Datenquelle</legend>
+    <label><input type="radio" name="co2-source" value="simulator" [checked]="source.selected() === 'simulator'" (change)="source.select('simulator')"> Simulator</label>
+    <label><input type="radio" name="co2-source" value="sensor" [checked]="source.selected() === 'sensor'" (change)="source.select('sensor')"> Sensor</label>
+  </fieldset>
   <section [class]="'reading ' + status().color" aria-labelledby="co2-label">
     <h2 id="co2-label">CO₂-Konzentration</h2>
     <p class="measurement"><strong>{{ source.current()?.ppm ?? '—' }}</strong><span>ppm</span></p>
@@ -11,8 +16,16 @@
     <p class="hint">{{ status().hint }}</p>
   </section>
   <div class="controls">
-    <p role="status">{{ source.state().status === 'running' ? 'Simulation läuft' : 'Simulation pausiert' }}</p>
-    <button type="button" (click)="toggle()">{{ source.state().status === 'running' ? 'Simulation stoppen' : 'Simulation starten' }}</button>
+    @if (source.selected() === 'simulator') {
+      <p role="status">{{ source.simulatorState().status === 'running' ? 'Simulation läuft' : 'Simulation pausiert' }}</p>
+      <button type="button" class="simulation-toggle" (click)="toggle()">{{ source.simulatorState().status === 'running' ? 'Simulation stoppen' : 'Simulation starten' }}</button>
+    } @else {
+      <p role="status">{{ source.sensorText() }}</p>
+      <p>Nur aktuelle Vorschau · Wird nicht gespeichert.</p>
+      <aside class="prototype-warning" role="note" aria-label="Warnung für diesen Prototyp">
+        Prototyp-Warnung: Bei unserem SCD41 ist Isopropanol auf die Membran gelangt. Die Messgenauigkeit ist nicht bestätigt.
+      </aside>
+    }
   </div>
   <button type="button" class="history-link" (click)="toggleHistory()" [attr.aria-expanded]="history.visible()" aria-controls="air-monitor-history">
     {{ history.visible() ? 'Verlauf ausblenden' : 'Verlauf anzeigen' }}
@@ -20,10 +33,10 @@
   <div id="air-monitor-history" [hidden]="!history.visible()">
     @if (historyCreated()) { <app-co2-chart /> }
   </div>
-  <app-device-discovery />
+  <app-device-discovery [selectedSource]="source.selected()" />
   <app-synchronization />
   <footer>
-    <p>Simulierte Werte · Kein Sensor verbunden</p>
+    <p>{{ source.selected() === 'simulator' ? 'Simulierte Werte · Simulation wird lokal gespeichert.' : 'Sensorvorschau · Gespeicherte Messungen bleiben im Verlauf verfügbar.' }}</p>
     <p>Demo-Schwellen: unter 1000 ppm grün, 1000–1999 ppm gelb, ab 2000 ppm rot. Keine medizinische Bewertung.</p>
   </footer>
 </main>

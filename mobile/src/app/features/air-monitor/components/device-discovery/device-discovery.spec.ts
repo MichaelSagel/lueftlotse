@@ -12,7 +12,10 @@ import { DeviceDiscovery } from './device-discovery';
 import { BleScanner } from '../../data-access/ble-scanner';
 
 describe('DeviceDiscovery', () => {
-  beforeEach(() => TestBed.overrideComponent(DeviceDiscovery,{add:{providers:[{provide:BleJournalSync,useValue:{running:signal(false),savedMeasurements:signal(0),run:vi.fn(),cancel:vi.fn()}}]}}));
+  beforeEach(() => {
+    TestBed.configureTestingModule({ providers: [BleScanner, BleConnection] });
+    TestBed.overrideComponent(DeviceDiscovery,{add:{providers:[{provide:BleJournalSync,useValue:{running:signal(false),savedMeasurements:signal(0),run:vi.fn(),cancel:vi.fn()}}]}});
+  });
   afterEach(() => vi.restoreAllMocks());
   it('is collapsed by default, provides accessible disclosure and stops on collapse', () => {
     const fixture = TestBed.createComponent(DeviceDiscovery);
@@ -169,13 +172,16 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
 
 
 describe('DeviceDiscovery shared journal DI',()=>{
-  it('uses the component connection and inherited application storage/history',async()=>{
+  it('uses the route connection, scanner and inherited application storage/history',async()=>{
     const store=testStorage();
     TestBed.configureTestingModule({providers:[...routes[0].providers!,store.provider]});
     const fixture=TestBed.createComponent(DeviceDiscovery);
     const injector=fixture.debugElement.injector;
     const journal=injector.get(BleJournalSync) as unknown as {connection:BleConnection;storage:Co2Storage;history:Co2History};
     expect(journal.connection).toBe(injector.get(BleConnection));
+    expect(injector.get(BleConnection)).toBe(TestBed.inject(BleConnection));
+    expect(injector.get(BleScanner)).toBe(TestBed.inject(BleScanner));
+    expect(injector.get(BleJournalSync)).toBe(TestBed.inject(BleJournalSync));
     expect(journal.storage).toBe(TestBed.inject(Co2Storage));expect(journal.history).toBe(TestBed.inject(Co2History));
     await TestBed.inject(Co2History).whenSettled();fixture.destroy();
   });

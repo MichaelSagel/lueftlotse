@@ -29,6 +29,7 @@ class Peripheral implements BleAdapter {
   readonly acknowledged: bigint[] = [];
   private readonly control = new FragmentAssembler('control');
   private eventId = 0;
+  private sampleCounter = 0n;
   private notify?: (value: DataView) => void;
   subscriptions = 0;
   available(): boolean { return true; }
@@ -36,7 +37,7 @@ class Peripheral implements BleAdapter {
   async connect(id: string): Promise<void> {
     expect(id).toBe(address); this.log.push('connect'); this.control.reset(); this.eventId = 0;
   }
-  async readInfo(): Promise<DataView> { this.log.push('info'); return view(encodeInfo(deviceId)); }
+  async readInfo(): Promise<DataView> { this.log.push('info'); return view(encodeInfo(deviceId, 31, 1)); }
   async subscribe(_: string, callback: (value: DataView) => void): Promise<void> {
     this.log.push('subscribe'); this.notify = callback; this.subscriptions++;
   }
@@ -66,7 +67,9 @@ class Peripheral implements BleAdapter {
         throughSequence:entries.at(-1)!.sequence,count:entries.length} as const;
       const digest = await batchDigest(begin,entries);
       // Complete notifications arrive during write, before its Promise resolves.
-      this.emit(begin); for(const entry of entries) this.emit({type:0x83,batchId:begin.batchId,entry});
+      this.emit(begin);
+      this.emit({type:0x8a,bootId:deviceId,sampleCounter:++this.sampleCounter,uptimeMs:this.sampleCounter*5000n,ppm:1234});
+      for(const entry of entries) this.emit({type:0x83,batchId:begin.batchId,entry});
       this.emit({type:0x84,batchId:begin.batchId,digest});
     } else if (message.type === 4) {
       this.acknowledged.push(message.throughSequence); this.log.push('ack');
@@ -114,8 +117,8 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
     };
     const settled = async()=>{await fixture.whenStable(); await history.whenSettled(); fixture.detectChanges();};
     const download = async()=>{
-      await until(()=>{fixture.detectChanges();expect(button('Messwerte herunterladen').disabled).toBe(false);});
-      button('Messwerte herunterladen').click();
+      await until(()=>{fixture.detectChanges();expect(button('Journalmessungen herunterladen').disabled).toBe(false);});
+      button('Journalmessungen herunterladen').click();
       await until(()=>expect(journal.running()).toBe(false));
       await settled();
     };

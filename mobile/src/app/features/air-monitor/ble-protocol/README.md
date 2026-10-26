@@ -8,8 +8,9 @@ Bluetooth, IndexedDB or application state dependencies. SHA-256 uses Web Crypto.
 `../data-access/ble-connection.ts` now implements a separate Angular handshake
 service using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
 initializes BLE, connects, reads/validates Info v1.0/v1.1, subscribes to Events, then
-sends GET_STATUS and waits for the matching STATUS requestId. DeviceDiscovery provides one
-BleConnection together with the same BleScanner in its component scope. Its UI
+sends GET_STATUS and waits for the matching STATUS requestId. The application route
+provides one BleConnection, BleScanner and BleJournalSync shared by the page and
+DeviceDiscovery; the child component does not shadow these providers. Its UI
 shows handshake progress and Info deviceId, explicitly disconnects before switching
 devices, and preserves a ready connection when collapsed. Scanning is disabled
 during connection work and while connected; disconnect first to scan again.
@@ -25,8 +26,10 @@ write queue and at most four active exchanges. Waiting for FETCH never occupies
 the write queue or prevents ACK. Expected responses are registered before writes.
 Events IDs are independent. Request matching is installed before writing, and a
 write response alone never establishes readiness. Unsolicited STATUS may update
-status, but cannot complete a GET_STATUS request. Unexpected valid LIVE/batch
-messages have no import/current-reading side effects. Protocol/framing errors
+status, but cannot complete a GET_STATUS request. Once ready, a changed STATUS
+bootId closes the session and requires a new handshake. Valid LIVE_SAMPLE follows
+the preview rules below; other unsolicited LIVE/batch messages have no import
+side effects. Protocol/framing errors
 terminate the session; there are no automatic retries or reconnects.
 
 Timeouts: scanner barrier 15 s, initialize/connect 10 s each, Info/subscribe/write
@@ -43,9 +46,9 @@ requires recreating the application. Repeated cleanup never repeats native work.
 ## Explicit journal catch-up
 
 `../data-access/ble-journal-sync.ts` connects an exclusive journal session to
-BatchReceiver and IndexedDB. DeviceDiscovery provides one coordinator alongside
-its existing BleConnection; Co2Storage and Co2History are inherited from the
-application route. No new storage/history/source/simulator instance is created.
+BatchReceiver and IndexedDB. DeviceDiscovery uses the route's coordinator and
+BleConnection, together with the same Co2Storage and Co2History. No extra
+storage/history/source/simulator instance is created.
 After handshake the UI offers an explicit download button, progress and cancel.
 Device switching, disconnect and repeat download are blocked during the run.
 Collapsing the block retains the same services/run and never starts a download.
@@ -56,7 +59,7 @@ savedMeasurements resets on each explicit run and counts READY entries only afte
 durable commit, including identical already-present measurements. GAP/UNDATABLE
 are not included. This is not an ACK_ACCEPTED counter: it remains nonzero if ACK
 is lost after commit. The UI states that already-present records are included,
-shows the explicit result, and keeps the main CO2 reading labeled Simulator.
+shows the explicit result, and never changes the selected display source.
 
 `run(signal?)` allows one run and requires capabilities `0x000A`. It reads a fresh
 STATUS, returns `time-required` if time is invalid or UNDATED exists, and never
@@ -88,9 +91,10 @@ Co2History.imported() refreshes counts/chart after commit, preserves past table
 snapshots, and auto-refreshes only the live first page. Hidden history does not
 query chart/table. Pending-table indicators check new primary keys in the selected
 time range with a streaming IndexedDB cursor, never all records in memory.
-Co2Source/current CO2 and the simulator are not modified. The connection UI still
-confirms STATUS only, not live sensor measurements. No live sensor source,
-automatic time synchronization or firmware is implemented. Native GATT/CCCD,
+Journal catch-up does not modify the selected source or current CO2. Preview can
+continue between complete journal messages on the same Events assembler; it never
+enters journal listeners, batch queues or imports. No automatic time synchronization
+is implemented. Native GATT/CCCD,
 radio loss and Android lifecycle timing still require hardware verification.
 
 - `codec.ts`: Info, message bodies, canonical entries and bounded batch digest
@@ -180,7 +184,7 @@ Info v1.0 accepts capability subsets of 0x000F; v1.1 accepts subsets of 0x001F,
 including zero in both versions. Unknown versions/bits are rejected.
 `encodeInfo(deviceId, capabilities, minor)` retains minor=0 by default.
 Required operation capabilities are checked above the wire codec.
-`supportsLiveSample(info)` checks valid Info v1.1 plus bit 0x0010 for future
+`supportsLiveSample(info)` checks valid Info v1.1 plus bit 0x0010 for
 preview consumers; LIVE_READY's bit 0 does not grant LIVE_SAMPLE.
 UUIDs, including batchId, are v4 with the RFC variant.
 READY, TIME_SET and TIME_ACCEPTED share the inclusive UTC range
@@ -192,7 +196,7 @@ checks; no clock-accuracy threshold is invented here.
 Tests contain literal wire/CRC vectors and two SHA-256 vectors computed independently
 with Node `crypto.createHash`, as well as the standard CRC check for `123456789`.
 
-## LIVE_SAMPLE codec-only extension
+## LIVE_SAMPLE v1.1 preview
 
 Type 0x8A: bootId:uuid, sampleCounter:u64, uptimeMs:u64, ppm:u32.
 The body is exactly 36 bytes; with CRC it is 40 bytes in three 20/20/18-byte
@@ -203,9 +207,40 @@ measurementId, persistence, import, ACK or cursor semantics.
 Shared Info/body/CRC/frame fixtures live in `docs/test-vectors/ble-live-sample-v1.1.json`
 and are consumed by both C++ and `live-sample.spec.ts`.
 
-Version/capability audit: encodeInfo/decodeInfo use version-specific masks;
-fragment headers continue checking major=1; journal capability 0x000A is unchanged.
-The handshake test's unsupported minor is now 2, with explicit tests for both
-supported minors. The existing UI error wording mentioning v1.0 is presentation,
-not a version check, and is unchanged in this codec-only step. BLE publication,
-UI source selection, message consumers and storage are not added by this extension.
+BleConnection accepts preview only after the matching STATUS handshake and all
+Control writes complete, with Info minor=1 and capability 0x0010. bootId must match
+the handshake STATUS. sampleCounter must strictly increase and uptimeMs must not
+decrease within the connection; comparisons use bigint. Equal uptime is valid,
+counter gaps are valid. Wrong bootId, duplicate/regressing counters, regressing
+uptime, premature or unsupported preview are ignored without refreshing freshness.
+Framing/CRC/field errors still close the session. Each reconnect starts new order
+checks; callbacks retain the owning session identity and obsolete callbacks are
+ignored. Fragment IDs are never reset just to change a source.
+
+The non-replaying `previewEvents` stream emits ready/unavailable transitions and
+validated samples. `Co2Monitor` uses it solely for the current display. A BLE
+connection never selects Sensor. Explicit Sensor selection stops the simulator,
+clears the displayed value and waits for a NEW sample (— until then). It maintains
+one sample and one 15-second timeout, also while waiting for the first sample
+after readiness. Disconnect/unsupported preview is unavailable immediately;
+15 seconds without an accepted new sample clears the value and shows unavailable.
+A fresh sample restores the preview. Neither condition falls back to Simulator.
+Switching back to Simulator explicitly starts simulation; initial default is
+Simulator, paused as before. Scope destruction removes the subscriber and timer.
+
+`CO2_SOURCE` remains bound to the simulator for Co2History. Sensor preview has no
+Co2Reading wall-clock time, readings/persistence observable, measurementId or
+storage dependency. It never calls IndexedDB, history import, cursor APIs or HTTP.
+The manual journal path may still persist canonical READY entries independently
+of the selected display source. Simulator persistence/synchronization is unchanged.
+
+The German Sensor UI includes a warning about isopropanol exposure of **our
+prototype's** SCD41. This is a device-specific prototype warning, not a field,
+capability, validity rule or accuracy claim in the BLE protocol.
+
+Tests cover handshake/version/capability gates, bigint ordering, bootId, CRC,
+old callbacks, source switching, first/subsequent sample timeouts, reconnect,
+shared route DI and cleanup. Integration tests use the real codec/session/UI and
+fake IndexedDB/native GATT/HTTP boundaries: preview changes the display without
+database/history/backend records, simulator records still persist/upload, and
+manual journal catch-up works with preview interspersed between journal messages.

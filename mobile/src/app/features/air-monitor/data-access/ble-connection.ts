@@ -1,12 +1,15 @@
 import { DOCUMENT } from '@angular/common';
 import { DestroyRef, Injectable, inject, signal } from '@angular/core';
-import { decodeInfo, Message } from '../ble-protocol/codec';
+import { Subject } from 'rxjs';
+import { decodeInfo, Message, supportsLiveSample } from '../ble-protocol/codec';
 import { FragmentAssembler, fragmentMessage } from '../ble-protocol/fragments';
 import { BLE_ADAPTER } from './ble-adapter';
 import { BleScanner } from './ble-scanner';
 
 type Status = Extract<Message, { type: 0x80 }>;
 type Info = ReturnType<typeof decodeInfo>;
+export type LiveSample = Extract<Message, { type: 0x8a }>;
+export type PreviewEvent = { kind: 'ready' } | { kind: 'unavailable' } | { kind: 'sample'; sample: LiveSample };
 export type JournalCommand = Extract<Message, {type: 1 | 3 | 4}>;
 export class BleCommandError extends Error {
   constructor(readonly code: number) { super('BLE protocol error ' + code); }
@@ -40,11 +43,14 @@ interface Session {
   listeners: Set<(message: Message) => void>;
   leased: boolean;
   exchanges: number;
+  bootId?: string;
+  sampleCounter?: bigint;
+  uptimeMs?: bigint;
   cleanup?: Promise<void>;
   closing?: Promise<void>;
 }
 
-/** Handshake/STATUS only. No Co2Source, measurement imports, ACKs or automatic reconnect. */
+/** One Events assembler/session for handshake, manual journal requests and volatile preview. */
 @Injectable()
 export class BleConnection {
   private readonly adapter = inject(BLE_ADAPTER);
@@ -55,6 +61,9 @@ export class BleConnection {
   readonly info = signal<Info | null>(null);
   readonly status = signal<Status | null>(null);
   readonly error = signal<string | null>(null);
+  private readonly preview = new Subject<PreviewEvent>();
+  /** No replay/cache: selecting Sensor always waits for a NEW valid notification. */
+  readonly previewEvents = this.preview.asObservable();
   private session?: Session;
   private destroyed = false;
   private readonly background = () => { if (this.document.hidden) void this.disconnect().catch(() => {}); };
@@ -65,6 +74,7 @@ export class BleConnection {
       this.destroyed = true;
       this.document.removeEventListener('visibilitychange', this.background);
       void this.disconnect().catch(() => {});
+      this.preview.complete();
     });
   }
 
@@ -75,6 +85,7 @@ export class BleConnection {
     const session: Session = { id, abort: new AbortController(), assembler: new FragmentAssembler('events'),
       pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, tail: Promise.resolve(), requests: new Map(), writeTail: Promise.resolve(), listeners: new Set(), leased: false, exchanges: 0 };
     this.session = session; this.info.set(null); this.status.set(null); this.error.set(null); this.state.set('connecting');
+    this.preview.next({ kind: 'unavailable' });
     const cancel = () => { void this.close(session, signal?.reason ?? new Error('Cancelled')).catch(() => {}); };
     signal?.addEventListener('abort', cancel, { once: true });
     try {
@@ -98,7 +109,9 @@ export class BleConnection {
       await this.operation(session, () => this.adapter.subscribe(id, value => this.receive(session, value)));
       this.assertCurrent(session); this.phase.set('status');
       const status = await this.enqueueStatus(session);
-      this.assertCurrent(session); this.phase.set('ready'); this.state.set('ready'); return status;
+      this.assertCurrent(session); session.bootId = status.bootId; this.status.set(status);
+      this.phase.set('ready'); this.state.set('ready');
+      this.preview.next({ kind: 'ready' }); return status;
     } catch (error) {
       void this.close(session, error).catch(() => {});
       throw error;
@@ -207,8 +220,20 @@ export class BleConnection {
       const decoded = session.assembler.push(new Uint8Array(value.buffer,value.byteOffset,value.byteLength).slice());
       if (!decoded) return;
       const message = decoded.message;
+      if (message.type === 0x8a) {
+        const info = this.info();
+        if (this.state() !== 'ready' || !info || !supportsLiveSample(info) || message.bootId !== session.bootId) return;
+        if (session.sampleCounter !== undefined && message.sampleCounter <= session.sampleCounter) return;
+        if (session.uptimeMs !== undefined && message.uptimeMs < session.uptimeMs) return;
+        session.sampleCounter = message.sampleCounter; session.uptimeMs = message.uptimeMs;
+        this.preview.next({ kind: 'sample', sample: message });
+        return; // Never forward preview to journal listeners or persistence.
+      }
       const request = 'requestId' in message ? session.requests.get(message.requestId) : undefined;
-      if (message.type === 0x80 && (message.requestId === 65535 || request?.types.includes(0x80))) this.status.set(message);
+      if (message.type === 0x80 && (message.requestId === 65535 || request?.types.includes(0x80))) {
+        if (session.bootId && message.bootId !== session.bootId) throw new Error('STATUS bootId changed; reconnect required');
+        this.status.set(message);
+      }
       for (const listener of session.listeners) listener(message);
       if (message.type === 0xff) {
         const error = new BleCommandError(message.code);
@@ -229,6 +254,7 @@ export class BleConnection {
     session.requests.clear(); session.listeners.clear();
     if (reason) { this.error.set(reason instanceof Error ? reason.message : String(reason)); this.state.set('error'); }
     else this.state.set('closing');
+    this.preview.next({ kind: 'unavailable' });
     session.cleanup = (async () => {
       // Keep the slot reserved until uncancellable native operations settle. Never let old cleanup affect a new session.
       await Promise.allSettled([...session.pending]);

@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { BLE_ADAPTER, BleAdapter } from './ble-adapter';
-import { BleConnection } from './ble-connection';
+import { BleConnection, LiveSample } from './ble-connection';
 import { BleScanner } from './ble-scanner';
 import { encodeInfo, Message } from '../ble-protocol/codec';
 import { fragmentMessage } from '../ble-protocol/fragments';
@@ -26,6 +26,16 @@ describe('BleConnection handshake', () => {
   const emit = (message: Message, id = eventId++) => {
     for (const frame of fragmentMessage(message, id, 'events')) receive(view(frame));
   };
+  const sample = (sampleCounter = 1n, uptimeMs = 5000n, bootId = uuid): LiveSample =>
+    ({ type: 0x8a, bootId, sampleCounter, uptimeMs, ppm: 850 });
+  function receivedSamples(): LiveSample[] {
+    const samples: LiveSample[] = [];
+    connection.previewEvents.subscribe(event => { if (event.kind === 'sample') samples.push(event.sample); });
+    return samples;
+  }
+  function previewInfo(capabilities = 16, minor: 0 | 1 = 1): void {
+    vi.mocked(adapter.readInfo).mockResolvedValue(view(encodeInfo(uuid, capabilities, minor)));
+  }
   beforeEach(() => {
     vi.useFakeTimers(); eventId = 0; calls = [];
     stop = vi.fn(async () => { calls.push('stop'); });
@@ -88,6 +98,58 @@ describe('BleConnection handshake', () => {
     const buffer = new Uint8Array(30); buffer.set(encodeInfo(uuid,0),5);
     vi.mocked(adapter.readInfo).mockResolvedValue(new DataView(buffer.buffer,5,20));
     await connection.connect('address'); expect(connection.info()?.capabilities).toBe(0);
+  });
+  it.each([[0, 15], [1, 0], [1, 1], [1, 16], [1, 31]] as const)('gates LIVE_SAMPLE by Info v1.%s and capability %s', async (minor, capabilities) => {
+    previewInfo(capabilities, minor); const samples = receivedSamples();
+    await connection.connect('address'); emit(sample());
+    expect(samples).toHaveLength(minor === 1 && (capabilities & 16) !== 0 ? 1 : 0);
+    expect(connection.state()).toBe('ready');
+  });
+  it('ignores preview before the matching handshake and while its write is unfinished', async () => {
+    previewInfo(); const samples = receivedSamples(); const write = deferred<void>();
+    vi.mocked(adapter.write).mockImplementationOnce(() => {
+      emit(status(65535)); emit(sample(1n)); emit(status(0)); emit(sample(2n)); return write.promise;
+    });
+    const connected = connection.connect('address');
+    await vi.waitFor(() => expect(adapter.write).toHaveBeenCalled());
+    expect(samples).toEqual([]); expect(connection.state()).toBe('connecting');
+    write.resolve(); await connected; emit(sample(3n));
+    expect(samples).toEqual([sample(3n)]);
+  });
+  it('requires matching bootId, increasing uint64 counters and nondecreasing uptime', async () => {
+    previewInfo(); const samples = receivedSamples(); await connection.connect('address');
+    const n = 9007199254740992n;
+    emit(sample(n, n)); emit(sample(n, n)); emit(sample(n - 1n, n + 10n));
+    emit(sample(n + 1n, n - 1n));
+    emit(sample(n + 1n, n, '22345678-1234-4234-8234-123456789abc'));
+    emit(sample(n + 1n, n)); emit(sample(n + 10n, n + 1n));
+    expect(samples).toEqual([sample(n, n), sample(n + 1n, n), sample(n + 10n, n + 1n)]);
+  });
+  it('does not forward LIVE_SAMPLE into the manual journal stream', async () => {
+    previewInfo(31); const samples = receivedSamples(); await connection.connect('address');
+    const journal = connection.journal(); const listener = vi.fn(); journal.listen(listener);
+    emit(sample()); expect(samples).toHaveLength(1); expect(listener).not.toHaveBeenCalled();
+    expect(await journal.request({ type: 1 }, [0x80], new AbortController().signal)).toEqual(status(1));
+    expect(listener).toHaveBeenCalledWith(status(1)); journal.release();
+  });
+  it('resets order checks on reconnect and ignores prior-session notifications/disconnects', async () => {
+    previewInfo(); const samples = receivedSamples(); await connection.connect('address');
+    emit(sample(50n, 50000n)); const oldReceive = receive; const oldLost = lost;
+    await connection.disconnect(); eventId = 0; await connection.connect('address');
+    for (const frame of fragmentMessage(sample(99n), 1, 'events')) oldReceive(view(frame));
+    oldLost(); emit(sample(1n, 0n));
+    expect(connection.state()).toBe('ready'); expect(samples).toEqual([sample(50n, 50000n), sample(1n, 0n)]);
+  });
+  it('clears readiness when a later STATUS changes bootId', async () => {
+    previewInfo(); const samples = receivedSamples(); await connection.connect('address');
+    emit({ ...status(65535), bootId: '22345678-1234-4234-8234-123456789abc' }); emit(sample());
+    expect(connection.state()).toBe('error'); expect(samples).toEqual([]); await connection.disconnect();
+  });
+  it('rejects corrupt preview CRC without delivering a sample', async () => {
+    previewInfo(); const samples = receivedSamples(); await connection.connect('address');
+    const frames = fragmentMessage(sample(), eventId++, 'events'); frames[2][frames[2].length - 1] ^= 1;
+    frames.forEach(frame => receive(view(frame)));
+    expect(samples).toEqual([]); expect(connection.state()).toBe('error'); await connection.disconnect();
   });
   it.each([[0, 0], [0, 15], [1, 0], [1, 16], [1, 31]] as const)('retains the STATUS handshake with Info v1.%s capabilities=%s', async (minor, capabilities) => {
     vi.mocked(adapter.readInfo).mockResolvedValue(view(encodeInfo(uuid, capabilities, minor)));

@@ -4,9 +4,14 @@ header { margin-bottom: 28px; }
 .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #52675e; }
 h1 { margin: 8px 0 16px; font-size: 34px; letter-spacing: -1px; }
 .badge { display: inline-block; padding: 6px 12px; border: 1px solid #b7cbc1; border-radius: 20px; font-size: 13px; font-weight: 600; }
+.source-picker { display: flex; gap: 24px; margin: 0 0 20px; padding: 8px 12px; border: 1px solid #b7cbc1; border-radius: 14px; }
+.source-picker label { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.source-picker input { accent-color: #17663e; }
+.prototype-warning { padding: 12px; border: 1px solid #725400; border-radius: 14px; background: #fff3c9; color: #725400; font-size: 14px; line-height: 1.5; text-align: left; }
 .reading { --accent: #17663e; --surface: #e4f3e9; background: var(--surface); border: 1px solid var(--accent); border-radius: 24px; padding: 28px 20px; text-align: center; transition: background-color .6s, border-color .6s; }
 .yellow { --accent: #725400; --surface: #fff3c9; }
 .red { --accent: #a52c2c; --surface: #fce6e4; }
+.unavailable { --accent: #52675e; --surface: #f0f3f1; }
 h2 { font-size: 15px; font-weight: 500; margin: 0; }
 .measurement { margin: 24px 0; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 10px; }
 .measurement strong { font-size: clamp(56px, 18vw, 80px); font-variant-numeric: tabular-nums; letter-spacing: -3px; line-height: 1.1; }

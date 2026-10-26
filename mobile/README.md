@@ -2,6 +2,53 @@
 
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.2.
 
+## Current CO2 source: Simulator / Sensor
+
+Choose **Datenquelle → Simulator / Sensor** explicitly. Connecting a BLE device
+does not change this selection. Simulator starts/stops with its simulation button
+and keeps the existing local history and manual backend synchronization.
+
+Selecting Sensor stops simulation, clears the current reading to **—**, and waits
+for a new LIVE_SAMPLE after a successful BLE STATUS handshake. The device must
+advertise Info v1.1 with capability 0x0010. Disconnect, unsupported preview or
+15 seconds without a new valid sample shows **Sensor nicht verfügbar**, with no
+automatic fallback. Reconnect requires another handshake and a new sample.
+Switching explicitly back to Simulator resumes simulation.
+
+Sensor preview is only the current reading: it does not enter IndexedDB, the
+chart/history or HTTP synchronization. **Journalmessungen herunterladen** remains
+a separate manual operation for persistent journal records, regardless of the
+display source. The page and DeviceDiscovery share the same route-scoped BLE
+session. Collapsing discovery preserves it.
+
+The Sensor screen warns about isopropanol contact with the membrane of **our
+prototype's SCD41**. Receiving valid data does not establish its accuracy. The
+warning is specific to this prototype, not a BLE protocol property.
+
+Run the complete web checks from `mobile/` (no APK preparation):
+
+```text
+npm test -- --watch=false
+npm run build -- --configuration production
+```
+
+Hardware checks still needed in the Android app with compatible firmware:
+
+1. Start Simulator, connect a device and confirm Simulator remains selected.
+2. Select Sensor: simulation stops, the value shows —, then a NEW sensor sample
+   appears. Confirm the prototype warning and absence of simulation controls.
+3. Interrupt notifications for 15 seconds or disconnect: the reading clears and
+   unavailability is explicit. Sensor stays selected; reconnect waits for new data.
+4. Switch Simulator / Sensor repeatedly: Sensor never reuses a cached sample.
+   Simulator resumes recording when explicitly selected again.
+5. With journal-capable firmware, download journal records manually while viewing
+   Sensor. Only canonical journal records enter history/backend, not preview.
+
+See [BLE implementation notes](src/app/features/air-monitor/ble-protocol/README.md)
+for session validation, timer and persistence boundaries. Browser tests use a fake
+native adapter; real radio loss, Android lifecycle and SCD41 accuracy are not
+established by these checks.
+
 ## Development server
 
 To start a local development server, run:
