@@ -5,6 +5,7 @@ import { decodeInfo, Message, supportsLiveSample } from '../ble-protocol/codec';
 import { FragmentAssembler, fragmentMessage } from '../ble-protocol/fragments';
 import { BLE_ADAPTER } from './ble-adapter';
 import { BleScanner } from './ble-scanner';
+import { BleBindingStore } from './ble-binding';
 
 type Status = Extract<Message, { type: 0x80 }>;
 type Info = ReturnType<typeof decodeInfo>;
@@ -56,13 +57,18 @@ export class BleConnection {
   private readonly adapter = inject(BLE_ADAPTER);
   private readonly scanner = inject(BleScanner);
   private readonly document = inject(DOCUMENT);
+  private readonly bindings = inject(BleBindingStore);
+  readonly binding = this.bindings.saved;
+  readonly bindingError = this.bindings.error;
+  readonly bindingLoading = this.bindings.loading;
+  private bindingChanges = 0;
   readonly state = signal<'idle' | 'connecting' | 'ready' | 'closing' | 'error'>('idle');
   readonly phase = signal<'idle' | 'scan-stop' | 'initialize' | 'connect' | 'info' | 'subscribe' | 'status' | 'ready' | 'closing' | 'error'>('idle');
   readonly info = signal<Info | null>(null);
   readonly status = signal<Status | null>(null);
   readonly error = signal<string | null>(null);
   private readonly preview = new Subject<PreviewEvent>();
-  /** No replay/cache: selecting Sensor always waits for a NEW valid notification. */
+  /** No replay/cache: the Sensor display waits for a NEW valid notification. */
   readonly previewEvents = this.preview.asObservable();
   private session?: Session;
   private destroyed = false;
@@ -80,7 +86,7 @@ export class BleConnection {
 
   async connect(id: string, signal?: AbortSignal): Promise<Status> {
     if (!this.adapter.available()) throw new Error('BLE is available only in the Android app');
-    if (this.destroyed || this.document.hidden || this.session || !id) throw new Error('BLE session unavailable');
+    if (this.destroyed || this.document.hidden || this.session || this.bindingChanges || !id) throw new Error('BLE session unavailable');
     signal?.throwIfAborted();
     const session: Session = { id, abort: new AbortController(), assembler: new FragmentAssembler('events'),
       pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, tail: Promise.resolve(), requests: new Map(), writeTail: Promise.resolve(), listeners: new Set(), leased: false, exchanges: 0 };
@@ -92,6 +98,7 @@ export class BleConnection {
       this.assertCurrent(session); this.phase.set('scan-stop');
       await this.operation(session, () => this.scanner.stop(), 15000);
       this.assertCurrent(session); this.phase.set('initialize');
+      await this.operation(session, () => this.bindings.ready());
       await this.operation(session, () => this.adapter.initialize(), 10000);
       this.assertCurrent(session); this.phase.set('connect');
       session.connecting = true;
@@ -103,13 +110,16 @@ export class BleConnection {
       this.assertCurrent(session);
       if (value.byteLength !== 20) throw new Error('Info must be 20 bytes');
       const info = decodeInfo(new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
+      this.bindings.assertIdentity(info.deviceId);
       this.info.set(info);
       this.assertCurrent(session); this.phase.set('subscribe');
       session.subscribed = true; // Also clean up a subscription whose Promise completes late or fails.
       await this.operation(session, () => this.adapter.subscribe(id, value => this.receive(session, value)));
       this.assertCurrent(session); this.phase.set('status');
       const status = await this.enqueueStatus(session);
-      this.assertCurrent(session); session.bootId = status.bootId; this.status.set(status);
+      this.assertCurrent(session); session.bootId = status.bootId;
+      await this.operation(session, () => this.bindings.remember(info.deviceId, id, session.abort.signal));
+      this.assertCurrent(session); this.status.set(status);
       this.phase.set('ready'); this.state.set('ready');
       this.preview.next({ kind: 'ready' }); return status;
     } catch (error) {
@@ -140,8 +150,33 @@ export class BleConnection {
     };
   }
 
+  /** Transport cleanup (background, disposal, journal errors); preserves user intent. */
   disconnect(): Promise<void> {
     return this.session ? this.close(this.session) : Promise.resolve();
+  }
+
+  disconnectByUser(): Promise<void> {
+    return this.changeBinding(() => this.bindings.disableConnection());
+  }
+
+  forgetDevice(): Promise<void> {
+    return this.changeBinding(() => this.bindings.forget());
+  }
+
+  private async changeBinding(change: () => Promise<void>): Promise<void> {
+    this.bindingChanges++;
+    // Abort immediately, so a late handshake cannot enqueue a new remembered identity.
+    const closing = this.disconnect();
+    try {
+      const results = await Promise.allSettled([change(), closing]);
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+      this.error.set(null);
+      if (!this.session) this.state.set('idle');
+    } catch (error) {
+      this.error.set(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally { this.bindingChanges--; }
   }
 
   private current(session: Session): boolean { return this.session === session && !session.abort.signal.aborted; }

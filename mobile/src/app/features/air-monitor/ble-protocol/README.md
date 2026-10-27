@@ -15,6 +15,24 @@ shows handshake progress and Info deviceId, explicitly disconnects before switch
 devices, and preserves a ready connection when collapsed. Scanning is disabled
 during connection work and while connected; disconnect first to scan again.
 
+`BleBindingStore` keeps one versioned Info UUID / native BLE address /
+`connectionEnabled` setting in a separate IndexedDB database via the replaceable
+`BLE_BINDING_STORAGE` adapter. Connection waits for settings to load, rejects a
+different Info UUID before subscribing, and commits the binding only after the
+matching STATUS and Control write complete. The same UUID may update its address
+after a new successful handshake. Readiness is announced only after persistence
+also succeeds. Neither settings restoration nor any disconnect starts BLE work.
+
+`disconnect()` is transport cleanup and preserves intent; the UI's explicit
+Trennen calls `disconnectByUser()`. `forgetDevice()` aborts the session and removes
+the binding, without clearing history or journal cursors. Settings mutations are
+serialized: an in-flight save finishes before disable/remove, and a cancelled
+handshake cannot enqueue a new save. New connects are blocked until the explicit
+action settles. Failed persistence still closes the transport and surfaces an
+error. A failed remove retains disabled intent when that preceding write succeeds.
+Unreadable records fail closed; explicit forgetting can remove a corrupt record.
+This is application selection, not pairing/bonding; auto-connect remains absent.
+
 Only Android is supported by the default adapter; browser connect rejects before
 scanner/native calls. All known capability subsets are valid for this handshake;
 there is no invented live/journal capability requirement for GET_STATUS.
@@ -34,6 +52,8 @@ terminate the session; there are no automatic retries or reconnects.
 
 Timeouts: scanner barrier 15 s, initialize/connect 10 s each, Info/subscribe/write
 5 s each, STATUS response 5 s after write completion, cleanup caller wait 10 s.
+Binding load/save caller waits are 5 s; pending operations remain tracked until
+settled before the session slot can be reused.
 The existing fragment deadline is 5 s. Connect accepts an AbortSignal for the
 handshake; disconnect is explicit after readiness. Backgrounding/destruction
 cancels the session and removes local timers/listeners. Native calls cannot be

@@ -9,6 +9,20 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
     <button type="button" (click)="toggle()" [attr.aria-expanded]="expanded()" aria-controls="ble-discovery">Sensor verbinden</button>
     <section id="ble-discovery" [hidden]="!expanded()" aria-label="Bluetooth-Geräte suchen">
       @if (scanner.available) {
+        @if (connection.bindingLoading()) { <p role="status">Gespeichertes Gerät wird geladen …</p> }
+        @if (connection.binding(); as saved) {
+          <div class="saved-device">
+            <p>Gespeicherter Sensor</p>
+            <p>Geräte-ID: {{ saved.deviceId }}<br>BLE-Adresse: {{ saved.bleAddress }}</p>
+            @if (!saved.connectionEnabled) { <p>Manuell getrennt.</p> }
+            <p>Die Verbindung wird mit „Verbinden“ gestartet.</p>
+            <button type="button" class="connect-saved" (click)="connect(saved.bleAddress)"
+              [disabled]="busy() || scanner.busy() || connection.state() === 'ready'">Verbinden</button>
+          </div>
+        }
+        @if (connection.binding() || connection.bindingError()) {
+          <button type="button" class="forget" (click)="forget()" [disabled]="pending() || transferring()">Gerät vergessen</button>
+        }
         <p>BLE-Geräte in der Nähe suchen. Die Sensoranzeige wartet auf neue Messwerte.</p>
         <button type="button" (click)="startScan()" [disabled]="busy() || scanner.busy() || scanner.state() === 'scanning' || connection.state() === 'ready'">Geräte suchen</button>
         @if (scanner.state() === 'scanning') {
@@ -29,7 +43,7 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
           <p class="download-count" role="status">Bestätigt gespeichert: {{ journal.savedMeasurements() }} Messwerte (einschließlich bereits vorhandener).</p>
         }
         @if (downloadResult(); as result) { <p class="download-result" role="status">{{ resultText() }} {{ result.message }}</p> }
-        @if (connection.state() === 'ready' || busy()) {
+        @if (connection.binding() || connection.state() === 'ready' || busy()) {
           <button type="button" class="disconnect" (click)="disconnect()" [disabled]="pending() || transferring()">Trennen</button>
         }
         @if (errorText(); as error) { <p role="alert">{{ error }}</p> }
@@ -54,6 +68,7 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
     ul { padding: 0; list-style: none; }
     li { padding: 12px 0; border-top: 1px solid #b7cbc1; overflow-wrap: anywhere; }
     li span { display: block; }
+    .saved-device { overflow-wrap: anywhere; }
   `,
 })
 export class DeviceDiscovery {
@@ -80,9 +95,11 @@ export class DeviceDiscovery {
     ready: 'Verbindung bereit.', closing: 'Verbindung wird beendet …', error: 'Verbindung konnte nicht vollständig beendet werden.',
   })[this.connection.phase()]);
   protected readonly errorText = computed(() => {
-    const message = this.connection.error() ?? this.actionError();
+    const message = this.connection.bindingError() ?? this.connection.error() ?? this.actionError();
     if (!message) return null;
     if (/cleanup/i.test(message)) return 'Die Verbindung konnte nicht sicher beendet werden. Bitte die App vollständig schließen und erneut öffnen.';
+    if (/binding UUID mismatch/i.test(message)) return 'Dieses Gerät stimmt nicht mit dem gespeicherten Sensor überein. Die Bindung wurde nicht geändert. Für einen anderen Sensor zuerst „Gerät vergessen“ wählen.';
+    if (/binding storage/i.test(message)) return 'Die Gerätebindung konnte nicht gelesen, gespeichert oder gelöscht werden. Bitte erneut versuchen; eine beschädigte Bindung kann mit „Gerät vergessen“ entfernt werden.';
     if (/version|capabilit|Info must|UUID/i.test(message)) return 'Dieses Gerät unterstützt das erwartete Lüftlotse-Protokoll v1.0/v1.1 nicht.';
     if (/timed out|timeout/i.test(message)) return 'Zeitüberschreitung. Das Gerät hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.';
     if (/disconnected/i.test(message)) return 'Die Verbindung zum Gerät wurde unterbrochen.';
@@ -103,7 +120,14 @@ export class DeviceDiscovery {
   protected async disconnect(): Promise<void> {
     if (this.pending() || this.transferring()) return;
     this.pending.set(true); this.actionError.set(null);
-    try { await this.connection.disconnect(); }
+    try { await this.connection.disconnectByUser(); }
+    catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
+    finally { this.pending.set(false); }
+  }
+  protected async forget(): Promise<void> {
+    if (this.pending() || this.transferring()) return;
+    this.pending.set(true); this.actionError.set(null);
+    try { await this.connection.forgetDevice(); this.downloadResult.set(null); }
     catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
     finally { this.pending.set(false); }
   }

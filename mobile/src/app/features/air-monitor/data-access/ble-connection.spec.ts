@@ -4,6 +4,7 @@ import { BleConnection, LiveSample } from './ble-connection';
 import { BleScanner } from './ble-scanner';
 import { encodeInfo, Message } from '../ble-protocol/codec';
 import { fragmentMessage } from '../ble-protocol/fragments';
+import { testBleBindingStorage } from './ble-binding.testing';
 
 const uuid = '12345678-1234-4234-8234-123456789abc';
 const view = (bytes: Uint8Array) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -23,6 +24,7 @@ describe('BleConnection handshake', () => {
   let calls: string[];
   let adapter: BleAdapter;
   let stop: ReturnType<typeof vi.fn>;
+  let bindingStore: ReturnType<typeof testBleBindingStorage>;
   const emit = (message: Message, id = eventId++) => {
     for (const frame of fragmentMessage(message, id, 'events')) receive(view(frame));
   };
@@ -37,7 +39,7 @@ describe('BleConnection handshake', () => {
     vi.mocked(adapter.readInfo).mockResolvedValue(view(encodeInfo(uuid, capabilities, minor)));
   }
   beforeEach(() => {
-    vi.useFakeTimers(); eventId = 0; calls = [];
+    vi.useFakeTimers(); eventId = 0; calls = []; bindingStore = testBleBindingStorage();
     stop = vi.fn(async () => { calls.push('stop'); });
     adapter = {
       available: vi.fn(() => true),
@@ -51,7 +53,7 @@ describe('BleConnection handshake', () => {
         calls.push('write'); emit(status(value.getUint16(2, true)));
       }),
     };
-    TestBed.configureTestingModule({ providers: [BleConnection, { provide: BLE_ADAPTER, useValue: adapter },
+    TestBed.configureTestingModule({ providers: [BleConnection, bindingStore.provider, { provide: BLE_ADAPTER, useValue: adapter },
       { provide: BleScanner, useValue: { stop } }] });
     connection = TestBed.inject(BleConnection);
   });
@@ -68,6 +70,7 @@ describe('BleConnection handshake', () => {
     expect(await connection.connect('address')).toEqual(status(0));
     expect(calls).toEqual(['stop', 'initialize', 'connect', 'read', 'subscribe', 'write']);
     expect(connection.info()?.deviceId).toBe(uuid); expect(connection.state()).toBe('ready');
+    expect(bindingStore.saved()).toEqual({ version: 1, deviceId: uuid, bleAddress: 'address', connectionEnabled: true });
     expect(await connection.getStatus()).toEqual(status(1));
     await connection.disconnect(); await connection.disconnect();
     expect(adapter.unsubscribe).toHaveBeenCalledOnce(); expect(adapter.disconnect).toHaveBeenCalledOnce();
@@ -131,6 +134,8 @@ describe('BleConnection handshake', () => {
     emit(sample()); expect(samples).toHaveLength(1); expect(listener).not.toHaveBeenCalled();
     expect(await journal.request({ type: 1 }, [0x80], new AbortController().signal)).toEqual(status(1));
     expect(listener).toHaveBeenCalledWith(status(1)); journal.release();
+    expect(bindingStore.storage.write).toHaveBeenCalledTimes(1);
+    expect(Object.keys(bindingStore.saved() as object).sort()).toEqual(['bleAddress', 'connectionEnabled', 'deviceId', 'version']);
   });
   it('resets order checks on reconnect and ignores prior-session notifications/disconnects', async () => {
     previewInfo(); const samples = receivedSamples(); await connection.connect('address');
@@ -215,6 +220,7 @@ describe('BleConnection handshake', () => {
     await vi.waitFor(() => expect(adapter.write).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(5000); await check; await connection.disconnect();
     expect(adapter.unsubscribe).toHaveBeenCalledOnce();
+    expect(bindingStore.storage.write).not.toHaveBeenCalled();
   });
   it('rejects corrupt Events and handles protocol ERROR while write is pending', async () => {
     vi.mocked(adapter.write).mockImplementation(async () => { receive(view(Uint8Array.of(1))); });

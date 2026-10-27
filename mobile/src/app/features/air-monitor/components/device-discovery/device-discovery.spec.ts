@@ -10,10 +10,12 @@ import { BleClient } from '@capacitor-community/bluetooth-le';
 import { Capacitor } from '@capacitor/core';
 import { DeviceDiscovery } from './device-discovery';
 import { BleScanner } from '../../data-access/ble-scanner';
+import { BleBinding } from '../../data-access/ble-binding-storage';
+import { testBleBindingStorage } from '../../data-access/ble-binding.testing';
 
 describe('DeviceDiscovery', () => {
   beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [BleScanner, BleConnection] });
+    TestBed.configureTestingModule({ providers: [BleScanner, BleConnection, testBleBindingStorage().provider] });
     TestBed.overrideComponent(DeviceDiscovery,{add:{providers:[{provide:BleJournalSync,useValue:{running:signal(false),savedMeasurements:signal(0),run:vi.fn(),cancel:vi.fn()}}]}});
   });
   afterEach(() => vi.restoreAllMocks());
@@ -69,7 +71,10 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
   let journal: {running: ReturnType<typeof signal<boolean>>; savedMeasurements: ReturnType<typeof signal<number>>; run: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn>};
   let connection: {state: ReturnType<typeof signal<string>>; phase: ReturnType<typeof signal<string>>;
     info: ReturnType<typeof signal<{deviceId:string}|null>>; error: ReturnType<typeof signal<string|null>>;
-    connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>};
+    binding: ReturnType<typeof signal<BleBinding|null>>; bindingError: ReturnType<typeof signal<string|null>>;
+    bindingLoading: ReturnType<typeof signal<boolean>>;
+    connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
+    disconnectByUser: ReturnType<typeof vi.fn>; forgetDevice: ReturnType<typeof vi.fn>};
   let scanner: {available: boolean; state: ReturnType<typeof signal<string>>; busy: ReturnType<typeof signal<boolean>>;
     devices: ReturnType<typeof signal<{id:string;name:string;rssi:number}[]>>; message: ReturnType<typeof signal<string>>;
     start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>};
@@ -77,8 +82,11 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     calls=[];
     journal={running:signal(false),savedMeasurements:signal(0),run:vi.fn(async()=>({status:'complete',message:'OK'})),cancel:vi.fn()};
     connection={state:signal('idle'),phase:signal('idle'),info:signal(null),error:signal(null),
+      binding:signal(null),bindingError:signal(null),bindingLoading:signal(false),
       connect:vi.fn(async (id:string)=>{calls.push('connect:'+id);connection.info.set({deviceId});connection.state.set('ready');connection.phase.set('ready');}),
       disconnect:vi.fn(async ()=>{calls.push('disconnect');connection.state.set('idle');connection.phase.set('idle');connection.info.set(null);}),
+      disconnectByUser:vi.fn(async()=>{await connection.disconnect();const saved=connection.binding();if(saved)connection.binding.set({...saved,connectionEnabled:false});}),
+      forgetDevice:vi.fn(async()=>{await connection.disconnect();connection.binding.set(null);}),
     };
     scanner={available:true,state:signal('done'),busy:signal(false),devices:signal([{id:'ble-a',name:'Sensor A',rssi:-55},{id:'ble-b',name:'Sensor B',rssi:-65}]),
       message:signal('Suche beendet.'),start:vi.fn(async()=>{}),stop:vi.fn(async()=>{})};
@@ -123,8 +131,11 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     el.querySelector('button')!.click();fixture.detectChanges();
     (el.querySelector('.disconnect') as HTMLButtonElement).click();await flush();fixture.detectChanges();
     expect(connection.disconnect).toHaveBeenCalledOnce();expect(el.querySelector('.device-id')).toBeNull();
+    expect(connection.disconnectByUser).toHaveBeenCalledOnce();
   });
-  it.each([['Unsupported Info version','Protokoll v1.0'],['STATUS timed out','Zeitüberschreitung'],['BLE cleanup failed','sicher beendet']])('translates %s and handles rejected promises',async(message,text)=>{
+  it.each([['Unsupported Info version','Protokoll v1.0'],['STATUS timed out','Zeitüberschreitung'],['BLE cleanup failed','sicher beendet'],
+    ['BLE binding UUID mismatch','stimmt nicht mit dem gespeicherten Sensor überein'],
+    ['BLE binding storage could not be saved','Gerätebindung konnte nicht']])('translates %s and handles rejected promises',async(message,text)=>{
     connection.connect.mockRejectedValueOnce(new Error(message));
     const {fixture,el,buttons}=open();buttons()[0].click();await flush();fixture.detectChanges();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain(text);
@@ -168,6 +179,41 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     connection.state.set('ready');connection.phase.set('ready');journal.run.mockRejectedValueOnce(new Error('failure'));
     const {fixture,el}=open();(el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
     expect(el.querySelector('.download-result')?.textContent).toContain('Fehler');
+  });
+
+  it('shows the saved identity/address and connects only when the saved-device button is clicked',async()=>{
+    connection.binding.set({version:1,deviceId,bleAddress:'AA:BB:CC:DD:EE:01',connectionEnabled:false});
+    const {fixture,el}=open();
+    expect(el.querySelector('.saved-device')?.textContent).toContain(deviceId);
+    expect(el.querySelector('.saved-device')?.textContent).toContain('AA:BB:CC:DD:EE:01');
+    expect(el.textContent).toContain('Manuell getrennt');
+    expect(connection.connect).not.toHaveBeenCalled(); expect(scanner.start).not.toHaveBeenCalled();
+    (el.querySelector('.connect-saved') as HTMLButtonElement).click(); await flush(); fixture.detectChanges();
+    expect(connection.connect).toHaveBeenCalledExactlyOnceWith('AA:BB:CC:DD:EE:01');
+    expect(journal.run).not.toHaveBeenCalled();
+  });
+
+  it('uses the explicit disconnect/forget actions and can forget while already disconnected',async()=>{
+    connection.binding.set({version:1,deviceId,bleAddress:'AA:BB:CC:DD:EE:01',connectionEnabled:true});
+    const {fixture,el}=open();
+    (el.querySelector('.disconnect') as HTMLButtonElement).click(); await flush(); fixture.detectChanges();
+    expect(connection.disconnectByUser).toHaveBeenCalledOnce(); expect(connection.binding()?.connectionEnabled).toBe(false);
+    expect(el.querySelector('.forget')).not.toBeNull();
+    (el.querySelector('.forget') as HTMLButtonElement).click(); await flush(); fixture.detectChanges();
+    expect(connection.forgetDevice).toHaveBeenCalledOnce(); expect(connection.binding()).toBeNull();
+    expect(el.querySelector('.saved-device')).toBeNull(); expect(el.querySelector('.forget')).toBeNull();
+    expect(connection.connect).not.toHaveBeenCalled(); expect(journal.run).not.toHaveBeenCalled();
+  });
+
+  it('keeps forgetting disabled during a journal download and reports a failed removal',async()=>{
+    connection.binding.set({version:1,deviceId,bleAddress:'AA:BB:CC:DD:EE:01',connectionEnabled:false});
+    const {fixture,el}=open(); journal.running.set(true); fixture.detectChanges();
+    const forget=el.querySelector('.forget') as HTMLButtonElement;
+    expect(forget.disabled).toBe(true); forget.click(); expect(connection.forgetDevice).not.toHaveBeenCalled();
+    journal.running.set(false); connection.forgetDevice.mockRejectedValueOnce(new Error('BLE binding storage could not be removed'));
+    fixture.detectChanges(); forget.click(); await flush(); fixture.detectChanges();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Gerätebindung konnte nicht');
+    expect(el.querySelector('.saved-device')).not.toBeNull();
   });
 
 });

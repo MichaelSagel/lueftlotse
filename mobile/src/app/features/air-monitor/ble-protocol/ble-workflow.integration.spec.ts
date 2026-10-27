@@ -156,6 +156,7 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
           measurementId:original.measurementId,segment:original.segmentId,bootId:original.bootId,uptimeMs:original.uptimeMs.toString(),time:Number(original.utcMs),ppm:original.ppm});
       }
       button('Trennen').click(); await until(()=>expect(connection.state()).toBe('idle')); await settled(); expect(connection.state()).toBe('idle'); expect(peripheral.subscriptions).toBe(0);
+      await until(()=>expect(connection.binding()?.connectionEnabled).toBe(false));
       expect(await storage.bleCursor(deviceId)).toBe(4n);
       peripheral.add(); // The ring retains old records; a new measurement appeared while disconnected.
       button('Verbinden').click(); await until(()=>expect(connection.state()).toBe('ready')); await settled();

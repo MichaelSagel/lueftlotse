@@ -23,6 +23,41 @@ synchronization. The page and DeviceDiscovery share the same route-scoped BLE
 session. Collapsing discovery preserves it. Backgrounding still disconnects;
 automatic connection/reconnect and foreground services are not implemented.
 
+## Remembered BLE sensor
+
+After a successful STATUS handshake (including completion of its Control write),
+the app remembers one sensor: the UUID from Info, the BLE address supplied by the
+Android adapter, and `connectionEnabled: true`. This flag records connection intent
+for a future auto-connect feature; it does not currently initiate any connection.
+The saved sensor can be connected explicitly with **Verbinden**, without a scan.
+
+Every later connection must match the saved Info UUID. A mismatch closes the
+attempt without replacing the binding; choose **Gerät vergessen** before selecting
+a different sensor. The same UUID at a new address updates that address only after
+another successful handshake. **Trennen** closes the session and persists disabled
+intent, even when already disconnected. Backgrounding, radio loss, scope cleanup
+and journal failures close the transport without changing this intent.
+
+**Gerät vergessen** closes the session and removes the binding. It leaves history,
+journal cursors and pending backend synchronization intact. Forgetting and changing
+devices are disabled during a manual journal download; cancel the download first.
+Storage errors are shown explicitly; a failed write is not reported as a saved
+binding, and unreadable/unsupported settings are never silently overwritten.
+
+The binding is a versioned record in the separate IndexedDB database
+`lueftlotse-device`, store `settings`, key `ble-binding`. It survives normal app
+restarts in the same app/WebView origin. Clearing app/site data or uninstalling
+can remove it; it is not Android Bluetooth pairing or a native service preference.
+Clearing measurement history does not remove it. No LIVE_SAMPLE values, bootId,
+sampleCounter or uptimeMs are stored in this record.
+
+Tests recreate the application injector against the same fake IndexedDB to check
+restart persistence, UUID rejection, explicit disconnect/forget, late callbacks,
+pending writes and storage failures. Actual Android process-restart persistence
+still requires a device check when an APK is prepared.
+
+## Simulator tests and prototype accuracy
+
 `Co2Simulator` and the replaceable `CO2_SOURCE` token remain available for tests.
 The normal route supplies an inactive source with no readings for Co2History;
 it does not instantiate the simulator or connect preview to the history stream.
