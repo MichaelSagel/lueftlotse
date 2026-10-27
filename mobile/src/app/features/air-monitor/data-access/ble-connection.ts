@@ -6,23 +6,12 @@ import { FragmentAssembler, fragmentMessage } from '../ble-protocol/fragments';
 import { BLE_ADAPTER } from './ble-adapter';
 import { BleScanner } from './ble-scanner';
 import { BleBindingStore } from './ble-binding';
+import { BleCommandError, BleJournalLease, BleSession, BleSessionClient, BleSessionClosedError, BleStatus, PreviewEvent } from './ble-session';
+import { JournalLease } from './ble-journal-lease';
 
-type Status = Extract<Message, { type: 0x80 }>;
+type Status = BleStatus;
 type Info = ReturnType<typeof decodeInfo>;
-export type LiveSample = Extract<Message, { type: 0x8a }>;
-export type PreviewEvent = { kind: 'ready' } | { kind: 'unavailable' } | { kind: 'sample'; sample: LiveSample };
-export type JournalCommand = Extract<Message, {type: 1 | 3 | 4}>;
-export class BleCommandError extends Error {
-  constructor(readonly code: number) { super('BLE protocol error ' + code); }
-}
-export interface BleJournalLink {
-  readonly info: Info;
-  readonly signal: AbortSignal;
-  request(command: JournalCommand, types: readonly number[], signal: AbortSignal, prepared?: (id: number) => void): Promise<Message>;
-  listen(receive: (message: Message) => void): () => void;
-  close(): Promise<void>;
-  release(): void;
-}
+type JournalCommand = Extract<Message, {type: 1 | 3 | 4}>;
 interface Request {
   types: readonly number[];
   resolve: (message: Message) => void;
@@ -31,6 +20,7 @@ interface Request {
 }
 interface Session {
   id: string;
+  generation: string;
   abort: AbortController;
   assembler: FragmentAssembler;
   pending: Set<Promise<unknown>>;
@@ -38,11 +28,11 @@ interface Session {
   subscribed: boolean;
   nextId: number;
   queued: number;
-  tail: Promise<void>;
+  statusTail: Promise<void>;
   requests: Map<number, Request>;
-  writeTail: Promise<void>;
+  controlTail: Promise<void>;
   listeners: Set<(message: Message) => void>;
-  leased: boolean;
+  lease?: string;
   exchanges: number;
   bootId?: string;
   sampleCounter?: bigint;
@@ -53,7 +43,7 @@ interface Session {
 
 /** One Events assembler/session for handshake, manual journal requests and volatile preview. */
 @Injectable()
-export class BleConnection {
+export class BleConnection implements BleSession {
   private readonly adapter = inject(BLE_ADAPTER);
   private readonly scanner = inject(BleScanner);
   private readonly document = inject(DOCUMENT);
@@ -71,6 +61,8 @@ export class BleConnection {
   /** No replay/cache: the Sensor display waits for a NEW valid notification. */
   readonly previewEvents = this.preview.asObservable();
   private session?: Session;
+  private generation = 0n;
+  private readonly clients = new Set<AbortController>();
   private destroyed = false;
   private readonly background = () => { if (this.document.hidden) void this.disconnect().catch(() => {}); };
 
@@ -78,6 +70,8 @@ export class BleConnection {
     this.document.addEventListener('visibilitychange', this.background);
     inject(DestroyRef).onDestroy(() => {
       this.destroyed = true;
+      for (const client of this.clients) client.abort(new Error('BLE client destroyed'));
+      this.clients.clear();
       this.document.removeEventListener('visibilitychange', this.background);
       void this.disconnect().catch(() => {});
       this.preview.complete();
@@ -88,8 +82,8 @@ export class BleConnection {
     if (!this.adapter.available()) throw new Error('BLE is available only in the Android app');
     if (this.destroyed || this.document.hidden || this.session || this.bindingChanges || !id) throw new Error('BLE session unavailable');
     signal?.throwIfAborted();
-    const session: Session = { id, abort: new AbortController(), assembler: new FragmentAssembler('events'),
-      pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, tail: Promise.resolve(), requests: new Map(), writeTail: Promise.resolve(), listeners: new Set(), leased: false, exchanges: 0 };
+    const session: Session = { id, generation: (++this.generation).toString(), abort: new AbortController(), assembler: new FragmentAssembler('events'),
+      pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, statusTail: Promise.resolve(), requests: new Map(), controlTail: Promise.resolve(), listeners: new Set(), exchanges: 0 };
     this.session = session; this.info.set(null); this.status.set(null); this.error.set(null); this.state.set('connecting');
     this.preview.next({ kind: 'unavailable' });
     const cancel = () => { void this.close(session, signal?.reason ?? new Error('Cancelled')).catch(() => {}); };
@@ -103,7 +97,7 @@ export class BleConnection {
       this.assertCurrent(session); this.phase.set('connect');
       session.connecting = true;
       await this.operation(session, () => this.adapter.connect(id, () => {
-        if (this.current(session)) void this.close(session, new Error('BLE disconnected')).catch(() => {});
+        if (this.current(session)) void this.close(session, new BleSessionClosedError('BLE disconnected')).catch(() => {});
       }), 10000);
       this.assertCurrent(session); this.phase.set('info');
       const value = await this.operation(session, () => this.adapter.readInfo(id));
@@ -130,24 +124,46 @@ export class BleConnection {
 
   getStatus(): Promise<Status> {
     const session = this.session;
-    if (!session || session.leased || this.state() !== 'ready') return Promise.reject(new Error('BLE is not ready'));
+    if (!session || session.lease || this.state() !== 'ready') return Promise.reject(new Error('BLE is not ready'));
     return this.enqueueStatus(session);
   }
 
-  /** Exclusive ownership of journal requests; no generic raw writes escape this session. */
-  journal(): BleJournalLink {
-    const session = this.session; const info = this.info();
-    if (!session || !info || session.leased || session.queued || this.state() !== 'ready') throw new Error('BLE journal unavailable');
-    session.leased = true;
-    let released = false;
-    const owned = () => { this.assertCurrent(session); if (released) throw new Error('Journal released'); };
-    return {
-      info, signal: session.abort.signal,
-      request: (command, types, signal, prepared) => { owned(); return this.exchange(session, command, types, signal, prepared); },
-      listen: receive => { owned(); session.listeners.add(receive); return () => session.listeners.delete(receive); },
-      close: () => this.close(session),
-      release: () => { released = true; session.leased = false; },
+  attachClient(): BleSessionClient {
+    if (this.destroyed) throw new Error('BLE session destroyed');
+    const controller = new AbortController(); const id = crypto.randomUUID();
+    this.clients.add(controller);
+    const owned = () => { controller.signal.throwIfAborted(); if (this.destroyed) throw new Error('BLE session destroyed'); };
+    const command = async <T>(run: () => Promise<T>): Promise<T> => {
+      owned(); const result = await run(); owned(); return result;
     };
+    return {
+      id, signal: controller.signal,
+      connect: address => command(() => this.connect(address, controller.signal)),
+      disconnect: () => command(() => this.disconnect()),
+      disconnectByUser: () => command(() => this.disconnectByUser()),
+      forgetDevice: () => command(() => this.forgetDevice()),
+      journal: signal => { owned(); return this.journal(id, controller.signal, signal); },
+      revoke: () => { controller.abort(new DOMException('BLE client revoked', 'AbortError')); this.clients.delete(controller); },
+    };
+  }
+
+  /** A lease is a capability on this connection, never another GATT session. */
+  private journal(clientId: string, clientSignal: AbortSignal, signal?: AbortSignal): BleJournalLease {
+    const session = this.session; const info = this.info();
+    signal?.throwIfAborted();
+    if (!session || !info || session.lease || session.queued || this.state() !== 'ready') throw new Error('BLE journal unavailable');
+    const leaseId = crypto.randomUUID(); session.lease = leaseId;
+    const current = () => this.current(session) && session.lease === leaseId;
+    return new JournalLease(Object.freeze({ generation: session.generation, clientId, leaseId }), {
+      info, signal: session.abort.signal, current,
+      exchange: (command, types, signal, prepared) => {
+        if (!current()) return Promise.reject(new Error('Obsolete journal lease'));
+        return this.exchange(session, command, types, signal, prepared);
+      },
+      listen: receive => { session.listeners.add(receive); return () => session.listeners.delete(receive); },
+      close: () => this.close(session),
+      release: () => { if (session.lease === leaseId) session.lease = undefined; },
+    }, signal ? [clientSignal, signal] : [clientSignal]);
   }
 
   /** Transport cleanup (background, disposal, journal errors); preserves user intent. */
@@ -207,12 +223,12 @@ export class BleConnection {
   private enqueueStatus(session: Session): Promise<Status> {
     if (session.queued >= 4) return Promise.reject(new Error('BLE command queue full'));
     session.queued++;
-    const result = session.tail.then(() => this.exchange(session, {type: 1}, [0x80], session.abort.signal) as Promise<Status>);
-    session.tail = result.then(() => {}, error => { void this.close(session, error).catch(() => {}); });
+    const result = session.statusTail.then(() => this.exchange(session, {type: 1}, [0x80], session.abort.signal) as Promise<Status>);
+    session.statusTail = result.then(() => {}, error => { void this.close(session, error).catch(() => {}); });
     return result.finally(() => { session.queued--; });
   }
 
-  /** Only writes occupy writeTail. Waiting for a FETCH result never blocks its ACK. */
+  /** Control serialization ends with the last write. Response promises live in requests. */
   private exchange(session: Session, command: JournalCommand, types: readonly number[], signal: AbortSignal, prepared?: (id: number) => void): Promise<Message> {
     try { this.assertCurrent(session); signal.throwIfAborted(); } catch(error) { return Promise.reject(error); }
     if (session.exchanges >= 4) return Promise.reject(new Error('BLE command queue full'));
@@ -227,15 +243,19 @@ export class BleConnection {
     session.requests.set(id,request); void response.catch(() => {});
     const abort = () => request.reject(signal.reason);
     signal.addEventListener('abort',abort,{once:true});
-    const write = session.writeTail.then(async () => {
+    const write = session.controlTail.then(async () => {
       this.assertCurrent(session); signal.throwIfAborted(); prepared?.(id);
       for (const frame of fragmentMessage(command,id,'control')) {
         signal.throwIfAborted();
-        await this.operation(session, () => this.adapter.write(session.id,new DataView(frame.buffer,frame.byteOffset,frame.byteLength)));
+        await this.operation(session, () => {
+          // A queued fragment must recheck the lease immediately before touching GATT.
+          signal.throwIfAborted();
+          return this.adapter.write(session.id,new DataView(frame.buffer,frame.byteOffset,frame.byteLength));
+        });
       }
       if (session.requests.has(id)) request.timer = setTimeout(() => request.reject(new Error('STATUS/command timed out')),5000);
     });
-    session.writeTail = write.then(() => {}, () => {});
+    session.controlTail = write.then(() => {}, () => {});
     void write.catch(error => request.reject(error));
     return (async () => {
       try {
@@ -283,7 +303,7 @@ export class BleConnection {
   private close(session: Session, reason?: unknown): Promise<void> {
     if (session.closing) return session.closing;
     this.phase.set('closing');
-    session.abort.abort(reason ?? new Error('BLE session closed'));
+    session.abort.abort(reason ?? new BleSessionClosedError('BLE session closed'));
     session.assembler.dispose();
     for (const request of session.requests.values()) { clearTimeout(request.timer); request.reject(session.abort.signal.reason); }
     session.requests.clear(); session.listeners.clear();

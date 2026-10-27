@@ -23,6 +23,27 @@ synchronization. The page and DeviceDiscovery share the same route-scoped BLE
 session. Collapsing discovery preserves it. Backgrounding still disconnects;
 automatic connection/reconnect and foreground services are not implemented.
 
+## Shared BLE session contract
+
+The page's Co2Monitor, DeviceDiscovery and BleJournalSync consume `BLE_SESSION`.
+The route aliases it with `useExisting: BleConnection`: there is still one working
+implementation, one GATT connection and one Events assembler. No native service,
+binding migration, reconnect or notification feature is enabled by this boundary.
+
+UI commands use revocable clients. A manual journal run owns an exclusive lease;
+each fetched packet has a token tied to the connection generation, client and
+lease. Released clients/leases and old packet tokens cannot issue later commands.
+Control writes are serialized separately from response waits. A packet's commit
+callback resolves only after the existing atomic IndexedDB transaction completes;
+only then can ACK be written. The next FETCH requires the matching ACK_ACCEPTED
+and completion of the ACK write. LIVE_SAMPLE remains outside this path.
+
+Cancellation, history clear and scope disposal revoke outstanding journal work.
+An idle lease can be released while retaining the connection; cancelling a request
+or an unconfirmed packet closes the connection because this implementation does
+not implement CANCEL_BATCH. Already committed records remain stored. Late commit
+completions and GATT callbacks cannot ACK or disturb a subsequent connection/run.
+
 ## Remembered BLE sensor
 
 After a successful STATUS handshake (including completion of its Control write),

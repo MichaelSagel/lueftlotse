@@ -1,6 +1,6 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { BleScanner } from '../../data-access/ble-scanner';
-import { BleConnection } from '../../data-access/ble-connection';
+import { BLE_SESSION } from '../../data-access/ble-session';
 import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-sync';
 
 @Component({
@@ -73,8 +73,10 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
 })
 export class DeviceDiscovery {
   protected readonly scanner = inject(BleScanner);
-  protected readonly connection = inject(BleConnection);
+  protected readonly connection = inject(BLE_SESSION);
+  private readonly client = this.connection.attachClient();
   protected readonly journal = inject(BleJournalSync);
+  constructor() { inject(DestroyRef).onDestroy(() => this.client.revoke()); }
   private readonly downloadPending = signal(false);
   protected readonly downloadResult = signal<JournalResult | null>(null);
   protected readonly transferring = computed(() => this.downloadPending() || this.journal.running());
@@ -112,22 +114,22 @@ export class DeviceDiscovery {
     if (this.busy() || this.scanner.busy() || !this.scanner.available) return;
     this.pending.set(true); this.actionError.set(null); this.downloadResult.set(null);
     try {
-      await this.connection.disconnect();
-      await this.connection.connect(id);
+      await this.client.disconnect();
+      await this.client.connect(id);
     } catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
     finally { this.pending.set(false); }
   }
   protected async disconnect(): Promise<void> {
     if (this.pending() || this.transferring()) return;
     this.pending.set(true); this.actionError.set(null);
-    try { await this.connection.disconnectByUser(); }
+    try { await this.client.disconnectByUser(); }
     catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
     finally { this.pending.set(false); }
   }
   protected async forget(): Promise<void> {
     if (this.pending() || this.transferring()) return;
     this.pending.set(true); this.actionError.set(null);
-    try { await this.connection.forgetDevice(); this.downloadResult.set(null); }
+    try { await this.client.forgetDevice(); this.downloadResult.set(null); }
     catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
     finally { this.pending.set(false); }
   }

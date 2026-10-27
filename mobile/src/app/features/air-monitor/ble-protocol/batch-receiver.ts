@@ -4,7 +4,10 @@ import type { Co2Storage } from '../data-access/co2-storage';
 
 export type BatchMessage = Extract<Message, { type: 0x82 | 0x83 | 0x84 }>;
 export type BatchAck = Extract<Message, { type: 4 }>;
-export interface BatchTransport { send(message: BatchAck, signal: AbortSignal): Promise<void>; }
+export interface BatchTransport {
+  /** The transport awaits this atomic commit before sending ACK and awaiting its response. */
+  commitAndSend(message: BatchAck, commit: () => Promise<void>, signal: AbortSignal): Promise<void>;
+}
 interface IncomingBatch {
   begin: Extract<Message, { type: 0x82 }>;
   entries: Entry[];
@@ -86,10 +89,11 @@ export class BatchReceiver {
     // The protocol deadline covers reception/verification, not an arbitrary DB timeout.
     clearTimeout(this.timer); this.timer = undefined;
     batch.phase = 'committing';
-    await this.storage.importBleBatch({ ...batch.begin, deviceId: this.deviceId, entries: batch.entries, digest }, batch.controller.signal);
-    this.assertActive(batch);
-    batch.phase = 'ack';
-    await this.transport.send({ type: 4, batchId: batch.begin.batchId, throughSequence: batch.begin.throughSequence, count: batch.begin.count, digest }, batch.controller.signal);
+    await this.transport.commitAndSend({ type: 4, batchId: batch.begin.batchId, throughSequence: batch.begin.throughSequence, count: batch.begin.count, digest }, async () => {
+      this.assertActive(batch);
+      await this.storage.importBleBatch({ ...batch.begin, deviceId: this.deviceId, entries: batch.entries, digest }, batch.controller.signal);
+      this.assertActive(batch); batch.phase = 'ack';
+    }, batch.controller.signal);
     this.assertActive(batch); this.finish?.resolve(); this.finish = undefined; this.release();
   }
 }

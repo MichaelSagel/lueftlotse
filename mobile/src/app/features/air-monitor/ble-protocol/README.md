@@ -3,7 +3,20 @@
 Pure TypeScript implementation of `docs/ble-protocol-v1.md`. No Angular,
 Bluetooth, IndexedDB or application state dependencies. SHA-256 uses Web Crypto.
 
-## Native connection boundary
+## Shared session and native adapter boundaries
+
+`../data-access/ble-session.ts` defines the application-facing `BLE_SESSION`
+contract. The route provides `{ provide: BLE_SESSION, useExisting: BleConnection }`;
+Co2Monitor (the page's preview), DeviceDiscovery and BleJournalSync all consume
+that alias. There is no second provider creating a GATT owner. Read-only session
+signals/preview are separate from `attachClient()` command capabilities.
+
+Client IDs and lease IDs are opaque tokens. Each connection has a fresh generation
+string, and each fetched packet a one-use ticket bound to that generation/client/
+lease. Revoke a client on scope disposal; revoke a download through its AbortSignal
+or lease. Late calls, queued writes and packet confirmations recheck ownership.
+Old release/close callbacks cannot revoke another lease or close a new connection.
+No native service, migrated settings, reconnect or notifications are implemented.
 
 `../data-access/ble-connection.ts` now implements a separate Angular handshake
 service using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
@@ -39,9 +52,12 @@ there is no invented live/journal capability requirement for GET_STATUS.
 
 One session owns one Events assembler and a Control ID allocator (0..65534).
 STATUS requests remain serialized and bounded to four including the active one.
-Journal ownership is exclusive; journal requests use a separate serialized Control
-write queue and at most four active exchanges. Waiting for FETCH never occupies
-the write queue or prevents ACK. Expected responses are registered before writes.
+Journal ownership is exclusive. `controlTail` serializes complete Control writes;
+the `requests` map owns response promises, independently of that queue. The separate
+`statusTail` bounds/serializes ordinary STATUS requests. At most four exchanges
+are active; a completed write never waits for its response inside `controlTail`.
+Expected responses are registered before writes, and lease cancellation is checked
+again immediately before every native fragment write.
 Events IDs are independent. Request matching is installed before writing, and a
 write response alone never establishes readiness. Unsolicited STATUS may update
 status, but cannot complete a GET_STATUS request. Once ready, a changed STATUS
@@ -65,9 +81,9 @@ requires recreating the application. Repeated cleanup never repeats native work.
 
 ## Explicit journal catch-up
 
-`../data-access/ble-journal-sync.ts` connects an exclusive journal session to
+`../data-access/ble-journal-sync.ts` connects an exclusive journal lease to
 BatchReceiver and IndexedDB. DeviceDiscovery uses the route's coordinator and
-BleConnection, together with the same Co2Storage and Co2History. No extra
+BLE_SESSION, together with the same Co2Storage and Co2History. No extra
 storage/history/source/simulator instance is created.
 After handshake the UI offers an explicit download button, progress and cancel.
 Device switching, disconnect and repeat download are blocked during the run.
@@ -85,25 +101,34 @@ shows the explicit result, and leaves the Sensor preview independent of the down
 STATUS, returns `time-required` if time is invalid or UNDATED exists, and never
 sends TIME_SET: there is no agreed uncertaintyMs estimator. With ready time it
 freezes STATUS.latest, reads the durable bigint cursor, and issues sequential
-FETCH(cursor, 100). BEGIN must match requestId, afterSequence and limit; entries
-are bounded to 100, and the receive queue to 102 messages (BEGIN + entries + END).
+FETCH(cursor, 100) through `lease.fetch()`. JournalLease validates the requestId,
+afterSequence, batch identity and count, and returns a complete copied packet and
+its token. Entries are bounded to 100, and the receive queue to 102 messages
+(BEGIN + entries + END). It keeps the 30-second deadline from the original BEGIN
+active through BatchReceiver's digest verification, until commit starts.
 The final packet is imported whole, even if it advances past the fixed target.
 Newly produced records do not extend this run's target.
 
 READY, GAP, UNDATABLE, receipt and cursor commit atomically. BatchReceiver exposes
-`completion`, resolving only after commit and transport.send; interruption, digest,
-storage and 30-second reception/verification timeout errors reject it. Here
-transport.send registers the ACK response before writing, then waits for matching
-ACK_ACCEPTED requestId and batchId. The next FETCH requires that confirmation and
-a reread cursor equal to the packet throughSequence and greater than its input.
+`completion`, resolving only after `transport.commitAndSend`; interruption, digest,
+storage and 30-second reception/verification timeout errors reject it. The receiver
+supplies an atomic commit callback to `lease.commitAndAcknowledge(token, ack, commit)`.
+The lease checks the one-use token and exact ACK fields, awaits commit (Co2Storage
+resolves on transaction.oncomplete), then registers/writes ACK and waits for matching
+ACK_ACCEPTED requestId and batchId AND completion of the Control write. There is
+no public raw request/ACK method. A next FETCH is rejected while a packet is
+receiving, verifying, committing or awaiting confirmation; the coordinator also
+rereads a cursor equal to the packet boundary and greater than its input.
 
 TIME_PENDING, BUSY and CLOCK_INVALID produce explicit results, with no polling or
 automatic retries. Missing/wrong ACK_ACCEPTED or any invalid packet stops the run
 and closes the link. A committed cursor survives ACK loss and is used on the next
 explicit connection/run. Cancellation, history clear, disconnect and background
 stop the entire run; receiver cancellation also aborts an uncommitted import.
-Errors/cancellation close the link; normal completion and time-required results
-release journal ownership without disconnecting. GAP_NOTICE/LIVE_READY do not
+Errors and cancellation of active work close the link. CANCEL_BATCH is not
+implemented, so revocation never guesses that an outstanding snapshot is safe to
+reuse. Idle release, normal completion and time-required results retain the
+connection. GAP_NOTICE/LIVE_READY do not
 import or advance cursors. An already-committed packet cannot be rolled back by
 a later cancellation; manual clear still removes it.
 
@@ -191,7 +216,8 @@ throughout; decimal-string index seeks are split at digit boundaries and streame
 in short pages. GAP and UNDATABLE never receive fabricated chart timestamps.
 Continuity labels are chart projections only; persisted device segment IDs stay intact.
 
-The injected transport's `send(ACK, signal)` is called only after commit.
+The injected transport's `commitAndSend(ACK, commit, signal)` awaits the supplied
+atomic commit before sending ACK; it must honor revocation and await confirmation.
 Disconnect during digest or the IndexedDB transaction cancels import and suppresses
 ACK; cancellation must also be honored by the future transport while sending.
 Disconnect/error after durable commit cannot roll it back: data and cursor remain,

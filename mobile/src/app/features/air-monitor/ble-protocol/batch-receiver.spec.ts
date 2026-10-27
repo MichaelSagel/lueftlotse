@@ -12,7 +12,8 @@ class FakeTransport implements BatchTransport {
   readonly acks: BatchAck[] = [];
   loseNext = false;
   onSend: (() => Promise<void>) | undefined;
-  async send(ack: BatchAck, signal: AbortSignal): Promise<void> {
+  async commitAndSend(ack: BatchAck, commit: () => Promise<void>, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted(); await commit();
     signal.throwIfAborted(); await this.onSend?.(); signal.throwIfAborted();
     if (this.loseNext) { this.loseNext = false; throw new Error('ACK lost'); }
     this.acks.push(ack);

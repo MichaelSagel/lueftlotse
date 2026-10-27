@@ -5,6 +5,7 @@ import { Co2History } from '../../data-access/co2-history';
 import { testStorage } from '../../data-access/co2-storage.testing';
 import { routes } from '../../../../app.routes';
 import { BleConnection } from '../../data-access/ble-connection';
+import { BLE_SESSION } from '../../data-access/ble-session';
 import { TestBed } from '@angular/core/testing';
 import { BleClient } from '@capacitor-community/bluetooth-le';
 import { Capacitor } from '@capacitor/core';
@@ -15,7 +16,7 @@ import { testBleBindingStorage } from '../../data-access/ble-binding.testing';
 
 describe('DeviceDiscovery', () => {
   beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [BleScanner, BleConnection, testBleBindingStorage().provider] });
+    TestBed.configureTestingModule({ providers: [BleScanner, BleConnection, {provide:BLE_SESSION,useExisting:BleConnection}, testBleBindingStorage().provider] });
     TestBed.overrideComponent(DeviceDiscovery,{add:{providers:[{provide:BleJournalSync,useValue:{running:signal(false),savedMeasurements:signal(0),run:vi.fn(),cancel:vi.fn()}}]}});
   });
   afterEach(() => vi.restoreAllMocks());
@@ -74,7 +75,7 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     binding: ReturnType<typeof signal<BleBinding|null>>; bindingError: ReturnType<typeof signal<string|null>>;
     bindingLoading: ReturnType<typeof signal<boolean>>;
     connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
-    disconnectByUser: ReturnType<typeof vi.fn>; forgetDevice: ReturnType<typeof vi.fn>};
+    disconnectByUser: ReturnType<typeof vi.fn>; forgetDevice: ReturnType<typeof vi.fn>; attachClient: ReturnType<typeof vi.fn>};
   let scanner: {available: boolean; state: ReturnType<typeof signal<string>>; busy: ReturnType<typeof signal<boolean>>;
     devices: ReturnType<typeof signal<{id:string;name:string;rssi:number}[]>>; message: ReturnType<typeof signal<string>>;
     start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>};
@@ -87,10 +88,11 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
       disconnect:vi.fn(async ()=>{calls.push('disconnect');connection.state.set('idle');connection.phase.set('idle');connection.info.set(null);}),
       disconnectByUser:vi.fn(async()=>{await connection.disconnect();const saved=connection.binding();if(saved)connection.binding.set({...saved,connectionEnabled:false});}),
       forgetDevice:vi.fn(async()=>{await connection.disconnect();connection.binding.set(null);}),
+      attachClient:vi.fn(()=>({...connection,revoke:vi.fn()})),
     };
     scanner={available:true,state:signal('done'),busy:signal(false),devices:signal([{id:'ble-a',name:'Sensor A',rssi:-55},{id:'ble-b',name:'Sensor B',rssi:-65}]),
       message:signal('Suche beendet.'),start:vi.fn(async()=>{}),stop:vi.fn(async()=>{})};
-    TestBed.overrideComponent(DeviceDiscovery,{set:{providers:[{provide:BleConnection,useValue:connection},{provide:BleScanner,useValue:scanner},{provide:BleJournalSync,useValue:journal}]}});
+    TestBed.overrideComponent(DeviceDiscovery,{set:{providers:[{provide:BLE_SESSION,useValue:connection},{provide:BleScanner,useValue:scanner},{provide:BleJournalSync,useValue:journal}]}});
   });
   const flush=async()=>{for(let i=0;i<12;i++) await Promise.resolve();};
   function open() {
@@ -227,6 +229,7 @@ describe('DeviceDiscovery shared journal DI',()=>{
     const injector=fixture.debugElement.injector;
     const journal=injector.get(BleJournalSync) as unknown as {connection:BleConnection;storage:Co2Storage;history:Co2History};
     expect(journal.connection).toBe(injector.get(BleConnection));
+    expect(injector.get(BLE_SESSION)).toBe(TestBed.inject(BleConnection));
     expect(injector.get(BleConnection)).toBe(TestBed.inject(BleConnection));
     expect(injector.get(BleScanner)).toBe(TestBed.inject(BleScanner));
     expect(injector.get(BleJournalSync)).toBe(TestBed.inject(BleJournalSync));

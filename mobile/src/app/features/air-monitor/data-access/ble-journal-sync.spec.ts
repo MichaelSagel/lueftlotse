@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { IDBFactory, IDBKeyRange, IDBObjectStore } from 'fake-indexeddb';
 import { BLE_ADAPTER, BleAdapter } from './ble-adapter';
 import { BleConnection } from './ble-connection';
+import { BLE_SESSION } from './ble-session';
 import { BleJournalSync } from './ble-journal-sync';
 import { BleScanner } from './ble-scanner';
 import { Co2Storage } from './co2-storage';
@@ -48,7 +49,7 @@ describe('BleJournalSync with real storage and a fake BLE peripheral',()=>{
         }
       },
     };
-    TestBed.configureTestingModule({providers:[BleConnection,BleJournalSync,{provide:BLE_ADAPTER,useValue:adapter},
+    TestBed.configureTestingModule({providers:[BleConnection,{provide:BLE_SESSION,useExisting:BleConnection},BleJournalSync,{provide:BLE_ADAPTER,useValue:adapter},
       {provide:BleScanner,useValue:{stop:async()=>{}}},{provide:Co2Storage,useValue:storage},{provide:Co2History,useValue:{imported}}]});
     connection=TestBed.inject(BleConnection);sync=TestBed.inject(BleJournalSync);
   });
@@ -143,6 +144,38 @@ describe('BleJournalSync with real storage and a fake BLE peripheral',()=>{
     expect(await storage.bleCursor(deviceId)).toBe(1n);ackMode='ok';await connect();
     expect((await sync.run()).status).toBe('complete');expect(await storage.count()).toBe(2);
     expect(commands.filter(m=>m.type===3).map(m=>m.type===3?m.afterSequence:0n)).toEqual([0n,1n]);
+  });
+
+  it('keeps an atomic commit but suppresses ACK after cancellation, including a late continuation during the next run',async()=>{
+    let resume!:()=>void;
+    const gate=new Promise<void>(resolve=>{resume=resolve;});
+    imported.mockImplementationOnce(()=>gate);
+    await connect();const old=sync.run();
+    await vi.waitFor(()=>expect(imported).toHaveBeenCalledOnce());
+    expect(await storage.bleCursor(deviceId)).toBe(1n);expect(await storage.count()).toBe(1);
+    expect(commands.filter(m=>m.type===4)).toHaveLength(0);
+    sync.cancel();expect((await old).status).toBe('cancelled');await connection.disconnect();
+    await connect();expect((await sync.run()).status).toBe('complete');
+    resume();await Promise.resolve();await Promise.resolve();
+    expect(commands.filter(m=>m.type===4).map(m=>m.type===4?m.throughSequence:0n)).toEqual([2n]);
+    expect(await storage.count()).toBe(2);expect(sync.savedMeasurements()).toBe(1);
+    expect(sync.running()).toBe(false);expect(connection.state()).toBe('ready');
+  });
+
+  it('rejects an old ACK callback after cancelling a committed packet and starting a new generation',async()=>{
+    ackMode='lost';await connect();const old=sync.run();
+    await vi.waitFor(()=>expect(commands.filter(m=>m.type===4)).toHaveLength(1));
+    const oldNotify=notify;const oldId=ackId;
+    const oldAck=commands.find(m=>m.type===4)! as Extract<Message,{type:4}>;
+    sync.cancel();expect((await old).status).toBe('cancelled');await connection.disconnect();
+    expect(await storage.bleCursor(deviceId)).toBe(1n);
+    await connect();const fresh=sync.run();
+    await vi.waitFor(()=>expect(commands.filter(m=>m.type===4)).toHaveLength(2));
+    for(const frame of fragmentMessage({type:0x87,requestId:oldId,batchId:oldAck.batchId},300,'events'))oldNotify(view(frame));
+    await Promise.resolve();expect(sync.running()).toBe(true);expect(connection.state()).toBe('ready');
+    const ack=commands.filter(m=>m.type===4).at(-1)! as Extract<Message,{type:4}>;
+    emit({type:0x87,requestId:ackId,batchId:ack.batchId});
+    expect((await fresh).status).toBe('complete');expect(await storage.bleCursor(deviceId)).toBe(2n);
   });
 
 });

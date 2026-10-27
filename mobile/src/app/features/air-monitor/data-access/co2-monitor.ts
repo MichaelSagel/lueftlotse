@@ -1,13 +1,13 @@
 import { computed, DestroyRef, inject, Injectable, signal } from '@angular/core';
 import { supportsLiveSample } from '../ble-protocol/codec';
-import { BleConnection, LiveSample } from './ble-connection';
+import { BLE_SESSION, LiveSample } from './ble-session';
 
 export type SensorState = 'disconnected' | 'connecting' | 'unsupported' | 'waiting' | 'live' | 'stale';
 
 /** Volatile Sensor display only; never feeds the CO2_SOURCE history path. */
 @Injectable()
 export class Co2Monitor {
-  private readonly connection = inject(BleConnection);
+  private readonly connection = inject(BLE_SESSION);
   private readonly sample = signal<LiveSample | null>(null);
   private readonly expired = signal(false);
   private timer?: ReturnType<typeof setTimeout>;

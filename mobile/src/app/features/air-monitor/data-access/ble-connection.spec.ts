@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { BLE_ADAPTER, BleAdapter } from './ble-adapter';
-import { BleConnection, LiveSample } from './ble-connection';
+import { BleConnection } from './ble-connection';
+import { LiveSample } from './ble-session';
 import { BleScanner } from './ble-scanner';
 import { encodeInfo, Message } from '../ble-protocol/codec';
 import { fragmentMessage } from '../ble-protocol/fragments';
@@ -130,10 +131,9 @@ describe('BleConnection handshake', () => {
   });
   it('does not forward LIVE_SAMPLE into the manual journal stream', async () => {
     previewInfo(31); const samples = receivedSamples(); await connection.connect('address');
-    const journal = connection.journal(); const listener = vi.fn(); journal.listen(listener);
-    emit(sample()); expect(samples).toHaveLength(1); expect(listener).not.toHaveBeenCalled();
-    expect(await journal.request({ type: 1 }, [0x80], new AbortController().signal)).toEqual(status(1));
-    expect(listener).toHaveBeenCalledWith(status(1)); journal.release();
+    const client = connection.attachClient(); const journal = client.journal();
+    emit(sample()); expect(samples).toHaveLength(1);
+    expect(await journal.getStatus()).toEqual(status(1)); journal.release(); client.revoke();
     expect(bindingStore.storage.write).toHaveBeenCalledTimes(1);
     expect(Object.keys(bindingStore.saved() as object).sort()).toEqual(['bleAddress', 'connectionEnabled', 'deviceId', 'version']);
   });

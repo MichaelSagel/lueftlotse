@@ -2,7 +2,7 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Subject } from 'rxjs';
 import { Info } from '../ble-protocol/codec';
-import { BleConnection, PreviewEvent } from './ble-connection';
+import { BLE_SESSION, PreviewEvent } from './ble-session';
 import { Co2Monitor } from './co2-monitor';
 import { Co2Simulator } from './co2-simulator';
 
@@ -23,7 +23,7 @@ describe('Sensor display and freshness', () => {
     vi.useFakeTimers(); events = new Subject();
     connection = { state: signal('idle'), info: signal(null) };
     TestBed.configureTestingModule({ providers: [Co2Monitor, Co2Simulator,
-      { provide: BleConnection, useValue: { ...connection, previewEvents: events.asObservable() } }] });
+      { provide: BLE_SESSION, useValue: { ...connection, previewEvents: events.asObservable() } }] });
     monitor = TestBed.inject(Co2Monitor); simulator = TestBed.inject(Co2Simulator);
   });
   afterEach(() => {
@@ -65,7 +65,7 @@ describe('Sensor display and freshness', () => {
     TestBed.resetTestingModule();
     ready(); sample();
     TestBed.configureTestingModule({ providers: [Co2Monitor,
-      { provide: BleConnection, useValue: { ...connection, previewEvents: events.asObservable() } }] });
+      { provide: BLE_SESSION, useValue: { ...connection, previewEvents: events.asObservable() } }] });
     monitor = TestBed.inject(Co2Monitor);
     expect(monitor.current()).toBeNull(); expect(monitor.sensorState()).toBe('waiting');
     await vi.advanceTimersByTimeAsync(15000);
