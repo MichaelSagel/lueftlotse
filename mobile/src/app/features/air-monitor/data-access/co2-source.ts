@@ -1,5 +1,5 @@
-﻿import { InjectionToken, Signal } from '@angular/core';
-import { Observable } from 'rxjs';
+﻿import { InjectionToken, Signal, signal } from '@angular/core';
+import { EMPTY, Observable } from 'rxjs';
 
 export interface Co2Reading {
   readonly time: number;
@@ -22,3 +22,14 @@ export interface Co2Source {
 }
 
 export const CO2_SOURCE = new InjectionToken<Co2Source>('CO2_SOURCE');
+
+/** Normal UI reads Sensor preview separately; only tests opt into generated history. */
+export function createInactiveCo2Source(): Co2Source {
+  return {
+    current: signal<Co2Reading | null>(null).asReadonly(),
+    state: signal<Co2SourceState>({ status: 'stopped', session: 0 }).asReadonly(),
+    readings: EMPTY,
+    start: () => {},
+    stop: () => {},
+  };
+}

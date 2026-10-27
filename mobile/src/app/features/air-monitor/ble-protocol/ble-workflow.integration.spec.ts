@@ -81,7 +81,7 @@ class Peripheral implements BleAdapter {
 describe('Manual BLE discovery-to-persistent-history workflow',()=>{
   afterEach(()=>{ TestBed.resetTestingModule(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-  it('discovers, handshakes, manually imports two batches and resumes without duplicates while the simulator remains active',async()=>{
+  it('discovers, handshakes, manually imports two batches and resumes without duplicates with an explicit simulator test source',async()=>{
     vi.stubGlobal('indexedDB',new IDBFactory()); vi.stubGlobal('IDBKeyRange',IDBKeyRange);
     // Freeze simulator ticks only; IndexedDB scheduling and BLE timeouts remain native.
     vi.useFakeTimers({toFake:['setInterval','clearInterval','Date']});
@@ -94,7 +94,8 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
       receive({device:{deviceId:address,name:'Lüftlotse Test'},rssi:-50} as ScanResult);
     });
     vi.spyOn(BleClient,'stopLEScan').mockImplementation(async()=>{peripheral.log.push('scan-stop');});
-    TestBed.configureTestingModule({imports:[AirMonitorPage],providers:[...routes[0].providers!,{provide:BLE_ADAPTER,useValue:peripheral}]});
+    TestBed.configureTestingModule({imports:[AirMonitorPage],providers:[...routes[0].providers!,
+      Co2Simulator,{provide:CO2_SOURCE,useExisting:Co2Simulator},{provide:BLE_ADAPTER,useValue:peripheral}]});
     const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
     const discovery = fixture.debugElement.query(By.directive(DeviceDiscovery));
     const injector = discovery.injector;
@@ -123,7 +124,7 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
       await settled();
     };
     try {
-      button('Gerät verbinden').click(); fixture.detectChanges();
+      button('Sensor verbinden').click(); fixture.detectChanges();
       button('Geräte suchen').click(); await until(()=>expect(scanner.busy()).toBe(false)); await settled();
       expect(scanner.devices()).toEqual([{id:address,name:'Lüftlotse Test',rssi:-50}]);
       button('Verbinden').click(); await until(()=>expect(connection.state()).toBe('ready')); await settled();
@@ -167,8 +168,8 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
       expect(second.filter(row=>row.source==='sensor').map(row=>row.measurementId)).toEqual(peripheral.records.map(row=>row.measurementId));
       expect(history.count()).toBe(6); expect(history.rangeCount()).toBe(6);
       expect(simulator.current()).toBe(current); expect(simulator.state()).toBe(sourceState); expect(sourceReadings).toEqual([]);
-      expect((fixture.nativeElement as HTMLElement).querySelector('.badge')?.textContent).toBe('Simulator');
-      expect((fixture.nativeElement as HTMLElement).querySelector('.measurement strong')?.textContent).toBe(String(current.ppm));
+      expect((fixture.nativeElement as HTMLElement).querySelector('.badge')?.textContent).toBe('Sensor');
+      expect((fixture.nativeElement as HTMLElement).querySelector('.measurement strong')?.textContent).toBe('1234');
       expect(injector.get(BleJournalSync)).toBe(journal); expect(injector.get(BleConnection)).toBe(connection);
       button('Trennen').click(); await until(()=>expect(connection.state()).toBe('idle')); await settled(); expect(peripheral.subscriptions).toBe(0);
     } finally {

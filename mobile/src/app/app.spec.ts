@@ -10,7 +10,7 @@ import { Co2History } from './features/air-monitor/data-access/co2-history';
 
  describe('App history disclosure', () => {
   afterEach(() => { TestBed.resetTestingModule(); vi.useRealTimers(); });
-  it('keeps one source, persisted data and selected table page while toggling the history block', async () => {
+  it('keeps existing history and its selected table page without starting simulation', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const now = Date.now();
     const storage = testStorage(Array.from({ length: 30 }, (_, i) => ({ time: now - (30 - i) * 1000, ppm: 600 + i, segment: 'seed' })));
@@ -26,9 +26,9 @@ import { Co2History } from './features/air-monitor/data-access/co2-history';
     expect(element.querySelector('app-co2-chart')).toBeNull();
     const injector = fixture.debugElement.query(By.css('app-air-monitor-page')).injector;
     const source = injector.get(CO2_SOURCE); const history = injector.get(Co2History);
-    expect(source).toBe(injector.get(Co2Simulator)); await history.whenSettled();
+    expect(injector.get(Co2Simulator, null)).toBeNull(); await history.whenSettled();
     expect(storage.storage.load).not.toHaveBeenCalled(); expect(storage.storage.page).not.toHaveBeenCalled();
-    source.start(); await vi.advanceTimersByTimeAsync(2000); await history.whenSettled(); expect(history.count()).toBe(32);
+    await vi.advanceTimersByTimeAsync(2000); await history.whenSettled(); expect(history.count()).toBe(30);
     expect(storage.storage.load).not.toHaveBeenCalled(); expect(storage.storage.tableSnapshot).not.toHaveBeenCalled();
     toggle.click(); await history.whenSettled(); fixture.detectChanges();
     expect(toggle.textContent).toContain('Verlauf ausblenden'); expect(toggle.getAttribute('aria-expanded')).toBe('true');
@@ -41,14 +41,16 @@ import { Co2History } from './features/air-monitor/data-access/co2-history';
     expect(block.hidden).toBe(true); expect(element.querySelector('app-co2-chart')).toBe(chart);
     const calls = [storage.storage.load.mock.calls.length, storage.storage.page.mock.calls.length, storage.storage.tableSnapshot.mock.calls.length];
     await vi.advanceTimersByTimeAsync(10000); await history.whenSettled();
-    expect(history.count()).toBe(42); expect(history.rows()).toBe(rows); expect(history.pageNumber()).toBe(2);
+    expect(history.count()).toBe(30); expect(history.rows()).toBe(rows); expect(history.pageNumber()).toBe(2);
     expect([storage.storage.load.mock.calls.length, storage.storage.page.mock.calls.length, storage.storage.tableSnapshot.mock.calls.length]).toEqual(calls);
     toggle.click(); await history.whenSettled(); fixture.detectChanges();
     expect(block.hidden).toBe(false); expect(element.querySelector('app-co2-chart')).toBe(chart);
     expect(history.period()).toBe('1h'); expect(history.pageNumber()).toBe(2); expect(history.tableRange()).toBe(tableRange);
-    expect(history.rows()).toEqual(rows); expect(history.rangeCount()).toBe(42);
-    expect(source.state().status).toBe('running'); expect(source.state().session).toBe(1);
-    expect(storage.storage.append).toHaveBeenCalledTimes(12); expect(router.url).toBe('/'); source.stop();
+    expect(history.rows()).toEqual(rows); expect(history.rangeCount()).toBe(30);
+    expect(injector.get(CO2_SOURCE)).toBe(source);
+    expect(source.state().status).toBe('stopped'); expect(source.current()).toBeNull();
+    expect(element.querySelector('.measurement strong')?.textContent).toBe('—');
+    expect(storage.storage.append).not.toHaveBeenCalled(); expect(router.url).toBe('/');
     expect(routes.some(route => route.path === 'history')).toBe(false);
   });
 });

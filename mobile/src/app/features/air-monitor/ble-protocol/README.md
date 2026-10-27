@@ -59,7 +59,7 @@ savedMeasurements resets on each explicit run and counts READY entries only afte
 durable commit, including identical already-present measurements. GAP/UNDATABLE
 are not included. This is not an ACK_ACCEPTED counter: it remains nonzero if ACK
 is lost after commit. The UI states that already-present records are included,
-shows the explicit result, and never changes the selected display source.
+shows the explicit result, and leaves the Sensor preview independent of the download.
 
 `run(signal?)` allows one run and requires capabilities `0x000A`. It reads a fresh
 STATUS, returns `time-required` if time is invalid or UNDATED exists, and never
@@ -91,7 +91,7 @@ Co2History.imported() refreshes counts/chart after commit, preserves past table
 snapshots, and auto-refreshes only the live first page. Hidden history does not
 query chart/table. Pending-table indicators check new primary keys in the selected
 time range with a streaming IndexedDB cursor, never all records in memory.
-Journal catch-up does not modify the selected source or current CO2. Preview can
+Journal catch-up does not modify the current CO2 preview. Preview can
 continue between complete journal messages on the same Events assembler; it never
 enters journal listeners, batch queues or imports. No automatic time synchronization
 is implemented. Native GATT/CCCD,
@@ -215,31 +215,33 @@ counter gaps are valid. Wrong bootId, duplicate/regressing counters, regressing
 uptime, premature or unsupported preview are ignored without refreshing freshness.
 Framing/CRC/field errors still close the session. Each reconnect starts new order
 checks; callbacks retain the owning session identity and obsolete callbacks are
-ignored. Fragment IDs are never reset just to change a source.
+ignored.
 
 The non-replaying `previewEvents` stream emits ready/unavailable transitions and
-validated samples. `Co2Monitor` uses it solely for the current display. A BLE
-connection never selects Sensor. Explicit Sensor selection stops the simulator,
-clears the displayed value and waits for a NEW sample (— until then). It maintains
+validated samples. `Co2Monitor` uses it solely for the current Sensor display,
+which starts empty and waits for a NEW sample (— until then). It maintains
 one sample and one 15-second timeout, also while waiting for the first sample
 after readiness. Disconnect/unsupported preview is unavailable immediately;
 15 seconds without an accepted new sample clears the value and shows unavailable.
-A fresh sample restores the preview. Neither condition falls back to Simulator.
-Switching back to Simulator explicitly starts simulation; initial default is
-Simulator, paused as before. Scope destruction removes the subscriber and timer.
+A fresh sample restores the preview. There is no simulator fallback or source
+selection in the normal UI. Scope destruction removes the subscriber and timer.
 
-`CO2_SOURCE` remains bound to the simulator for Co2History. Sensor preview has no
+The normal route binds `CO2_SOURCE` to an inactive source for Co2History, with no
+simulator instance or generated measurements. Co2Simulator and source overrides
+remain available to tests. Sensor preview has no
 Co2Reading wall-clock time, readings/persistence observable, measurementId or
 storage dependency. It never calls IndexedDB, history import, cursor APIs or HTTP.
 The manual journal path may still persist canonical READY entries independently
-of the selected display source. Simulator persistence/synchronization is unchanged.
+of preview. Existing history and manual synchronization are preserved, including
+earlier simulator records; explicitly supplied test sources still persist normally.
 
-The German Sensor UI includes a warning about isopropanol exposure of **our
-prototype's** SCD41. This is a device-specific prototype warning, not a field,
-capability, validity rule or accuracy claim in the BLE protocol.
+Isopropanol contacted the membrane of **our prototype's** SCD41. Its accuracy is
+unconfirmed even when data and CRC are valid. This remains a documented limitation
+of that sensor, without a warning on the main screen; it is not a field,
+capability or validity rule in the BLE protocol.
 
 Tests cover handshake/version/capability gates, bigint ordering, bootId, CRC,
-old callbacks, source switching, first/subsequent sample timeouts, reconnect,
+old callbacks, Sensor-only startup, first/subsequent sample timeouts, reconnect,
 shared route DI and cleanup. Integration tests use the real codec/session/UI and
 fake IndexedDB/native GATT/HTTP boundaries: preview changes the display without
 database/history/backend records, simulator records still persist/upload, and

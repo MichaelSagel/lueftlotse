@@ -104,7 +104,9 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     expect(el.querySelector('.device-id')).toBeNull();
     finish();await flush();fixture.detectChanges();
     expect(el.querySelector('.device-id')?.textContent).toContain(deviceId);
-    expect(el.textContent).toContain('Simulator-Modus');expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
+    expect(el.textContent).toContain('Sensor verbunden. Die aktuelle Vorschau wird nicht gespeichert.');
+    expect(el.textContent).not.toMatch(/Simulator|Simulation|Datenquelle/);
+    expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
   });
   it('awaits explicit disconnection before connecting to a different device',async()=>{
     connection.state.set('ready');connection.phase.set('ready');connection.info.set({deviceId});

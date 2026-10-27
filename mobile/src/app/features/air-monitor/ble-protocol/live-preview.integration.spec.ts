@@ -11,6 +11,7 @@ import { BleScanner } from '../data-access/ble-scanner';
 import { BleJournalSync } from '../data-access/ble-journal-sync';
 import { Co2Monitor } from '../data-access/co2-monitor';
 import { Co2Simulator } from '../data-access/co2-simulator';
+import { CO2_SOURCE } from '../data-access/co2-source';
 import { Co2History } from '../data-access/co2-history';
 import { Co2Storage } from '../data-access/co2-storage';
 import { Co2Sync } from '../data-access/co2-sync';
@@ -72,25 +73,32 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     fixture.destroy();
   });
 
-  it('switches explicitly, shows a dash until NEW data, and never persists or uploads preview', async () => {
+  it('shows only fresh Sensor data, preserves existing history and never persists or uploads preview', async () => {
+    await history.whenSettled();
+    await storage.append({ time: Date.now() - 1000, ppm: 650, segment: 'existing-history' });
+    await history.imported();
     const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    const select = (value: string) => { el.querySelector<HTMLInputElement>(`input[value="${value}"]`)!.click(); fixture.detectChanges(); };
     const reading = () => el.querySelector('.measurement strong')!.textContent;
-    const monitor = TestBed.inject(Co2Monitor); const simulator = TestBed.inject(Co2Simulator);
-    await history.whenSettled(); monitor.toggleSimulation(); await vi.advanceTimersByTimeAsync(1000); await history.whenSettled();
+    const source = TestBed.inject(CO2_SOURCE);
+    expect(TestBed.inject(Co2Simulator, null)).toBeNull();
+    expect(source.state().status).toBe('stopped'); expect(source.current()).toBeNull();
+    expect(reading()).toBe('—');
     expect(await storage.count()).toBe(1);
     const append = vi.spyOn(storage, 'append');
-    await connection.connect('sensor'); emit(sample(1n)); fixture.detectChanges();
-    expect(monitor.selected()).toBe('simulator'); expect(simulator.state().status).toBe('running');
-    expect(reading()).toBe(String(simulator.current().ppm)); expect(adapter.subscribe).toHaveBeenCalledOnce();
-    select('sensor'); expect(reading()).toBe('—'); expect(simulator.state().status).toBe('stopped');
-    expect(el.querySelector('.simulation-toggle')).toBeNull();
-    expect(el.querySelector('.prototype-warning')?.textContent).toContain('Bei unserem SCD41');
+    await connection.connect('sensor'); fixture.detectChanges();
+    expect(reading()).toBe('—'); expect(el.textContent).toContain('Warte auf einen neuen Sensorwert');
+    expect(adapter.subscribe).toHaveBeenCalledOnce();
+    expect(el.querySelector('.source-picker, .simulation-toggle, .prototype-warning')).toBeNull();
     expect(el.textContent).toContain('Sensor verbinden');
-    emit(sample(1n)); fixture.detectChanges(); expect(reading()).toBe('—'); // Not fresh.
-    emit(sample(2n)); fixture.detectChanges(); expect(reading()).toBe('950');
-    emit(sample(3n, 970)); fixture.detectChanges(); expect(reading()).toBe('970');
+    emit(sample(1n)); fixture.detectChanges(); expect(reading()).toBe('950');
+    expect(el.querySelector('.status')?.textContent).toContain('CO₂-Wert akzeptabel');
+    emit(sample(1n, 2222)); fixture.detectChanges(); expect(reading()).toBe('950'); // Duplicate ignored.
+    emit(sample(2n, 1000)); fixture.detectChanges(); expect(reading()).toBe('1000');
+    expect(el.querySelector('.status')?.textContent).toContain('Bitte lüften');
+    emit(sample(3n, 2000)); fixture.detectChanges(); expect(reading()).toBe('2000');
+    expect(el.querySelector('.status')?.textContent).toContain('Hoher CO₂-Wert');
+    expect(el.querySelector('.hint')?.textContent).toContain('Bitte lüften');
     await vi.advanceTimersByTimeAsync(2000); await history.whenSettled(); await history.refresh();
     expect(append).not.toHaveBeenCalled(); expect(await storage.count()).toBe(1); expect(history.measurements()).toHaveLength(1);
     expect(request).not.toHaveBeenCalled(); await TestBed.inject(Co2Sync).synchronize();
@@ -98,19 +106,19 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     const body = JSON.parse(request.mock.calls[0][1]!.body as string);
     expect(body.source).toBe('simulator'); expect(body.measurements).toHaveLength(1);
     emit(sample(4n)); await TestBed.inject(Co2Sync).synchronize(); expect(request).toHaveBeenCalledOnce();
-    select('simulator'); expect(simulator.state().status).toBe('running'); expect(el.querySelector('.prototype-warning')).toBeNull();
-    await vi.advanceTimersByTimeAsync(1000); await history.whenSettled(); expect(await storage.count()).toBe(2);
-    select('sensor'); expect(reading()).toBe('—'); fixture.destroy();
+    await vi.advanceTimersByTimeAsync(10000); await history.whenSettled();
+    expect(await storage.count()).toBe(1); expect(source.state().status).toBe('stopped');
+    expect(append).not.toHaveBeenCalled(); fixture.destroy();
   });
 
-  it('clears on disconnect, retains Sensor selection, and ignores obsolete callbacks on reconnect', async () => {
+  it('clears on disconnect, waits for NEW data and ignores obsolete callbacks on reconnect', async () => {
     const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement; const monitor = TestBed.inject(Co2Monitor);
-    monitor.select('sensor'); await connection.connect('sensor'); emit(sample(50n)); fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    await connection.connect('sensor'); emit(sample(50n)); fixture.detectChanges();
     expect(el.querySelector('.measurement')?.textContent).toContain('950');
     const oldReceive = receive; const oldLost = lost; lost(); fixture.detectChanges();
     expect(el.querySelector('.measurement strong')?.textContent).toBe('—'); expect(el.textContent).toContain('Sensor nicht verfügbar');
-    expect(monitor.selected()).toBe('sensor'); await connection.disconnect(); await connection.connect('sensor');
+    await connection.disconnect(); await connection.connect('sensor');
     fixture.detectChanges(); expect(el.querySelector('.measurement strong')?.textContent).toBe('—');
     fragmentMessage(sample(99n, 2222), 1, 'events').forEach(frame => oldReceive(view(frame))); oldLost();
     emit(sample(1n, 800)); fixture.detectChanges();

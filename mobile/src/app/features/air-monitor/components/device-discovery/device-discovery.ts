@@ -1,5 +1,4 @@
-import { Component, computed, inject, input, signal } from '@angular/core';
-import { DisplaySource } from '../../data-access/co2-monitor';
+import { Component, computed, inject, signal } from '@angular/core';
 import { BleScanner } from '../../data-access/ble-scanner';
 import { BleConnection } from '../../data-access/ble-connection';
 import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-sync';
@@ -7,10 +6,10 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
 @Component({
   selector: 'app-device-discovery',
   template: `
-    <button type="button" (click)="toggle()" [attr.aria-expanded]="expanded()" aria-controls="ble-discovery">{{ selectedSource() === 'sensor' ? 'Sensor verbinden' : 'Gerät verbinden' }}</button>
+    <button type="button" (click)="toggle()" [attr.aria-expanded]="expanded()" aria-controls="ble-discovery">Sensor verbinden</button>
     <section id="ble-discovery" [hidden]="!expanded()" aria-label="Bluetooth-Geräte suchen">
       @if (scanner.available) {
-        <p>BLE-Geräte in der Nähe suchen. {{ selectedSource() === 'simulator' ? 'Die Simulation läuft unabhängig weiter.' : 'Die Sensoranzeige wartet auf neue Messwerte.' }} Die Datenquelle wird durch Verbinden nicht gewechselt.</p>
+        <p>BLE-Geräte in der Nähe suchen. Die Sensoranzeige wartet auf neue Messwerte.</p>
         <button type="button" (click)="startScan()" [disabled]="busy() || scanner.busy() || scanner.state() === 'scanning' || connection.state() === 'ready'">Geräte suchen</button>
         @if (scanner.state() === 'scanning') {
           <button type="button" (click)="stopScan()">Suche stoppen</button>
@@ -18,7 +17,7 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
         <p role="status">{{ scanner.message() }}</p>
         <p role="status" class="connection-status">{{ phaseText() }}</p>
         @if (connection.state() === 'ready') {
-          <p>Gerät verbunden · STATUS bestätigt. {{ selectedSource() === 'simulator' ? 'Die aktuelle CO₂-Anzeige bleibt im Simulator-Modus.' : 'Sensor als Datenquelle ausgewählt. Die Vorschau wird nicht gespeichert.' }}</p>
+          <p>Sensor verbunden. Die aktuelle Vorschau wird nicht gespeichert.</p>
           <p class="device-id">deviceId: {{ connection.info()?.deviceId }}</p>
           <button type="button" class="download" (click)="download()" [disabled]="busy()">Journalmessungen herunterladen</button>
         }
@@ -58,7 +57,6 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
   `,
 })
 export class DeviceDiscovery {
-  readonly selectedSource = input<DisplaySource>('simulator');
   protected readonly scanner = inject(BleScanner);
   protected readonly connection = inject(BleConnection);
   protected readonly journal = inject(BleJournalSync);

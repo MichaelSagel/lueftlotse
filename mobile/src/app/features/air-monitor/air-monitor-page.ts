@@ -17,14 +17,11 @@ export class AirMonitorPage {
   }
   protected readonly status = computed(() => {
     const reading = this.source.current();
-    if (this.source.selected() === 'sensor' && !reading) return {
+    if (!reading) return {
       color: 'unavailable',
       label: this.source.sensorState() === 'waiting' ? 'Noch keine Messung' : 'Sensor nicht verfügbar',
       hint: this.source.sensorText(),
     };
-    return reading ? co2Status(reading.ppm) : { color: '', label: 'Noch keine Messung', hint: 'Warte auf den ersten CO₂-Wert.' };
+    return co2Status(reading.ppm);
   });
-  protected toggle(): void {
-    this.source.toggleSimulation();
-  }
 }

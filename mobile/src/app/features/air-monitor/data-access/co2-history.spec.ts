@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { routes } from '../../../app.routes';
 import { CO2_SOURCE } from './co2-source';
+import { Co2Simulator } from './co2-simulator';
 import { Co2History } from './co2-history';
 import { testStorage } from './co2-storage.testing';
 import { periodStart, retentionStart } from '../domain/history-range';
@@ -11,7 +12,8 @@ import { periodStart, retentionStart } from '../domain/history-range';
   function openHistory() { const history = TestBed.inject(Co2History); history.setVisible(true); return history; }
   beforeEach(() => {
     vi.useFakeTimers(); store = testStorage();
-    TestBed.configureTestingModule({ providers: [...routes[0].providers!, store.provider] });
+    TestBed.configureTestingModule({ providers: [...routes[0].providers!, store.provider,
+      Co2Simulator, { provide: CO2_SOURCE, useExisting: Co2Simulator }] });
   });
   afterEach(() => { TestBed.resetTestingModule(); vi.useRealTimers(); });
 
@@ -92,7 +94,8 @@ import { periodStart, retentionStart } from '../domain/history-range';
     expect(history.count()).toBe(2); expect(history.measurements()).toHaveLength(1);
     expect(store.storage.load).toHaveBeenCalledWith(history.range().start, history.range().end, expect.any(Function));
     TestBed.resetTestingModule();
-    TestBed.configureTestingModule({ providers: [...routes[0].providers!, store.provider] });
+    TestBed.configureTestingModule({ providers: [...routes[0].providers!, store.provider,
+      Co2Simulator, { provide: CO2_SOURCE, useExisting: Co2Simulator }] });
     const restored = openHistory(); await restored.whenSettled();
     await restored.record(800, now); await restored.refresh();
     expect(restored.count()).toBe(3);
