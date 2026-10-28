@@ -44,6 +44,17 @@ or an unconfirmed packet closes the connection because this implementation does
 not implement CANCEL_BATCH. Already committed records remain stored. Late commit
 completions and GATT callbacks cannot ACK or disturb a subsequent connection/run.
 
+## Standalone Java BLE core (not connected to the app)
+
+[`android/ble-protocol-core`](android/ble-protocol-core/README.md) contains the
+Android-independent Java codec and protocol session for a future single native
+GATT owner. JVM tests use the shared binary vectors and cover generations,
+bounded queues, handshake, LIVE_SAMPLE and commit-token → ACK → ACK_ACCEPTED.
+All uint64 bridge values are decimal strings. The module is not an app dependency;
+the working `BLE_SESSION` implementation and IndexedDB binding owner are unchanged.
+Its README documents the future transport/commit contracts and test/compile
+commands that do not package APKs.
+
 ## Remembered BLE sensor
 
 After a successful STATUS handshake (including completion of its Control write),

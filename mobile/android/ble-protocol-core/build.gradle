@@ -1,0 +1,21 @@
+plugins { id 'java-library' }
+
+repositories { mavenCentral() }
+
+// Java 8 APIs also available at the application's Android minSdk 24.
+tasks.withType(JavaCompile).configureEach {
+    options.release = 8
+    options.encoding = 'UTF-8'
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+}
+
+test {
+    useJUnit()
+    inputs.file('../../../docs/test-vectors/ble-live-sample-v1.1.json')
+    systemProperty 'sharedVectors', file('../../../docs/test-vectors/ble-live-sample-v1.1.json').absolutePath
+    testLogging { events 'failed', 'skipped'; exceptionFormat 'full' }
+}
