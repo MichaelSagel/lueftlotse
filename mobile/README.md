@@ -55,6 +55,12 @@ the working `BLE_SESSION` implementation and IndexedDB binding owner are unchang
 Its README documents the future transport/commit contracts and test/compile
 commands that do not package APKs.
 
+[`android/ble-gatt-transport`](android/ble-gatt-transport/README.md) adds an isolated
+Android GATT owner for that core: sequential discovery/Info/CCCD/handshake, finite
+callback deadlines, cancellation and generation checks. Fake-boundary JVM tests
+exercise it without a radio. It is also **not an app dependency**; no service,
+active BLE path, binding owner or foreground/background behavior changes yet.
+
 ## Remembered BLE sensor
 
 After a successful STATUS handshake (including completion of its Control write),

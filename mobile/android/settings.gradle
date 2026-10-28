@@ -1,6 +1,7 @@
 include ':app'
 // Standalone JVM protocol library; deliberately not an app dependency yet.
 include ':ble-protocol-core'
+include ':ble-gatt-transport'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 

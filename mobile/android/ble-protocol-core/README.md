@@ -7,6 +7,10 @@ The running application still uses `BleConnection` behind `BLE_SESSION`.
 Binding ownership remains in the existing IndexedDB store. No service, bridge,
 reconnect, notification or binding migration is enabled by this module.
 
+The separate [Android GATT transport](../ble-gatt-transport/README.md) now implements
+an opt-in owner around this core, with fake-boundary JVM tests. It is also excluded
+from the running app; this core's wire formats and public session API are unchanged.
+
 The production code has no external dependencies and targets Java 8 bytecode/APIs
 with the installed JDK 21. Its Java APIs are available at the application's
 Android minSdk 24. JUnit 4 and Gson are test-only dependencies.
