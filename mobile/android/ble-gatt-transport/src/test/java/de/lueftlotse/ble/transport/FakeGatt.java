@@ -30,7 +30,7 @@ final class FakeGatt {
             if (stopped) throw new RejectedExecutionException(); queue.addLast(task);
         }
         public Timer schedule(Runnable task, long delay) { assertTrue(running); Alarm alarm = new Alarm(); alarm.due = time + delay; alarm.task = task; alarms.add(alarm); return alarm; }
-        public long now() { assertTrue("Clock must be read on owner loop", running); return time; }
+        public long now() { return time; }
         public boolean isOnLoop() { return running; }
         public void shutdown() { assertTrue(running); stopped = true; }
         void run() {
@@ -109,10 +109,11 @@ final class FakeGatt {
         final Loop loop = new Loop(); final Boundary boundary = new Boundary(loop);
         final List<ProtocolSession.Event> events = new ArrayList<>();
         final List<Codec.Message> live = new ArrayList<>(); final List<String> reasons = new ArrayList<>();
+        final List<Long> receivedTimes = new ArrayList<>();
         Runnable eventHook;
         final GattTransport transport = new GattTransport(boundary, loop, new GattTransport.Listener() {
             public void event(GattTransport.Connection c, ProtocolSession.Event e) { assertTrue(loop.running); events.add(e); if (eventHook != null) eventHook.run(); }
-            public void live(GattTransport.Connection c, Codec.Message m) { assertTrue(loop.running); live.add(m); }
+            public void live(GattTransport.Connection c, Codec.Message m, long receivedAt) { assertTrue(loop.running); live.add(m); receivedTimes.add(receivedAt); }
             public void closed(GattTransport.Connection c, String reason) { assertTrue(loop.running); reasons.add(reason); }
         });
         GattTransport.Connection connection;

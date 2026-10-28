@@ -20,8 +20,9 @@ chart/history or HTTP synchronization. **Journalmessungen herunterladen** remain
 a separate manual operation for persistent journal records. Existing history,
 including earlier simulator records, remains available for viewing and manual
 synchronization. The page and DeviceDiscovery share the same route-scoped BLE
-session. Collapsing discovery preserves it. Backgrounding still disconnects;
-automatic connection/reconnect and foreground services are not implemented.
+session. Collapsing discovery preserves it. This Angular path still disconnects
+on backgrounding; automatic connection/reconnect is not implemented. The opt-in
+native service foundation below is not selected by the UI.
 
 ## Shared BLE session contract
 
@@ -44,22 +45,32 @@ or an unconfirmed packet closes the connection because this implementation does
 not implement CANCEL_BATCH. Already committed records remain stored. Late commit
 completions and GATT callbacks cannot ACK or disturb a subsequent connection/run.
 
-## Standalone Java BLE core (not connected to the app)
+## Java BLE core, GATT transport and opt-in Android service
 
 [`android/ble-protocol-core`](android/ble-protocol-core/README.md) contains the
-Android-independent Java codec and protocol session for a future single native
+Android-independent Java codec and protocol session for a single native
 GATT owner. JVM tests use the shared binary vectors and cover generations,
 bounded queues, handshake, LIVE_SAMPLE and commit-token → ACK → ACK_ACCEPTED.
-All uint64 bridge values are decimal strings. The module is not an app dependency;
-the working `BLE_SESSION` implementation and IndexedDB binding owner are unchanged.
+All uint64 bridge values are decimal strings. The native service depends on it
+through the transport; the Angular `BLE_SESSION` implementation and IndexedDB
+binding owner are unchanged.
 Its README documents the future transport/commit contracts and test/compile
 commands that do not package APKs.
 
 [`android/ble-gatt-transport`](android/ble-gatt-transport/README.md) adds an isolated
 Android GATT owner for that core: sequential discovery/Info/CCCD/handshake, finite
 callback deadlines, cancellation and generation checks. Fake-boundary JVM tests
-exercise it without a radio. It is also **not an app dependency**; no service,
-active BLE path, binding owner or foreground/background behavior changes yet.
+exercise it without a radio.
+
+The [Android service foundation](android/BLE_SERVICE.md) adds an explicitly started
+`connectedDevice` foreground service and local `BleService` Capacitor plugin.
+It owns the native transport independently of Activity/WebView and exposes state
+and an in-memory LIVE_SAMPLE with its original monotonic receipt time. A quiet
+German service notification has **Trennen**. A native ownership guard rejects a
+second connection across the existing plugin and the service. The installed BLE
+plugin still executes the existing UI's operations; Angular does not start or use
+the new service. No binding migration, auto-start/reconnect, journal bridge or CO₂
+alert has been added. LIVE_SAMPLE is not persisted by either path.
 
 ## Remembered BLE sensor
 

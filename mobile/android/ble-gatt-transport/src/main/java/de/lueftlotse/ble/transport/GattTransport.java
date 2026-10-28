@@ -19,7 +19,7 @@ public final class GattTransport implements AutoCloseable {
     public interface Listener {
         // Invoked on the loop. Must not block/wait on transport futures or perform storage here.
         void event(Connection connection, ProtocolSession.Event event);
-        void live(Connection connection, Codec.Message sample);
+        void live(Connection connection, Codec.Message sample, long receivedAtElapsedMs);
         void closed(Connection connection, String reason);
     }
     public static final class Connection {
@@ -35,6 +35,7 @@ public final class GattTransport implements AutoCloseable {
         private GattBoundary.Link link;
         private SerialLoop.Timer timer;
         private long deadline;
+        private long liveReceivedAt;
         private byte[] infoBytes;
         private Codec.Info info;
         private ProtocolSession core;
@@ -155,10 +156,12 @@ public final class GattTransport implements AutoCloseable {
             }); }
             public void events(byte[] value) {
                 byte[] copy = snapshot(value, 20);
+                long receivedAt = loop.now();
                 post(c, () -> {
                     // Firmware can notify between the local enable and the CCCD response. No handshake yet.
                     if (c.core == null) return;
                     c.core.receive(c.generation, copy);
+                    c.liveReceivedAt = receivedAt;
                 });
             }
             public void failure(String reason) { post(c, () -> finish(c, reason)); }
@@ -177,7 +180,7 @@ public final class GattTransport implements AutoCloseable {
             listener.event(c, event);
         }
         if (!usable(c)) { finish(c, "Cancelled by consumer"); return; }
-        Codec.Message sample = c.core.pollLiveSample(c.generation); if (sample != null) listener.live(c, sample);
+        Codec.Message sample = c.core.pollLiveSample(c.generation); if (sample != null) listener.live(c, sample, c.liveReceivedAt);
         if (!usable(c)) { finish(c, "Cancelled by consumer"); return; }
         if (c.core.state() == ProtocolSession.State.CLOSED) { finish(c, "Protocol closed"); return; }
         if (c.write == null) {

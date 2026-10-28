@@ -1,12 +1,12 @@
-# Android GATT transport (not connected to the app)
+# Android GATT transport
 
 This Android library owns a single `BluetoothGatt` and drives the existing
-[`ble-protocol-core`](../ble-protocol-core/README.md). It is included in Gradle
-for compilation and JVM tests only. The app has **no dependency on this module**
-and never calls its factory. The active TypeScript `BLE_SESSION` / `BleConnection`,
-BLE plugin, IndexedDB binding owner, UI and firmware are unchanged.
-There is no service, plugin registration, new permission declaration, pairing,
-automatic connection/reconnect, notification, binding migration or storage.
+[`ble-protocol-core`](../ble-protocol-core/README.md). The app now depends on this
+module through the explicitly started [service foundation](../BLE_SERVICE.md).
+The active TypeScript `BLE_SESSION` / `BleConnection`, IndexedDB binding owner,
+UI and firmware are unchanged. The native ownership guard prevents concurrent
+legacy-plugin and service connections. This transport has no pairing, automatic
+connection/reconnect, binding migration or storage.
 
 No external library/version was added: the module references the existing core
 project and reuses the already installed JUnit version for tests. Production
@@ -25,11 +25,12 @@ code uses only Android/JDK APIs, with compileSdk 36 and minSdk 24 from the root.
 - `SerialLoop`: injectable serial queue, monotonic clock and cancellable timers.
 - `AndroidGattTransport.create`: explicit factory using an application Context,
   BluetoothAdapter and Listener. It owns a HandlerThread and uses
-  `SystemClock.elapsedRealtime()`. Nothing in the running app invokes it.
+  `SystemClock.elapsedRealtime()`. Only the explicitly started native service
+  invokes it; Angular does not.
 
-The eventual application must choose one owner and must not instantiate this
-transport alongside an active plugin GATT session. The current stage does not
-perform that ownership switch. The caller is responsible for Android Bluetooth
+The service must acquire the shared native ownership lease before constructing
+this transport; the installed plugin's guarded connect uses the same lease pool.
+The caller is responsible for Android Bluetooth
 permissions and an enabled adapter; SecurityException/rejected operations fail
 the attempt and trigger cleanup, with no permission prompt or pairing attempt.
 
@@ -109,6 +110,10 @@ at the later integration stage.
 ## Preview and manual journal
 
 The listener gets immutable core events and accepted current LIVE_SAMPLE values.
+`live(connection, sample, receivedAtElapsedMs)` includes the monotonic receipt
+time of the final Events fragment, captured before posting to the owner queue.
+Delayed processing, polling and replaying state must not refresh this timestamp.
+`SerialLoop.now()` is consequently thread-safe, including callback threads.
 LIVE_SAMPLE is never saved and never creates ACKs. No journal command is automatic.
 The eventual available WebView explicitly acquires a journal lease and passes it
 to fetch/commit/cancel/revoke methods; these delegate to the private core on the

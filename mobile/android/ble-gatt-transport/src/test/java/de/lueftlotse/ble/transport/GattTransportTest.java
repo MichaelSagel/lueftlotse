@@ -8,6 +8,12 @@ import static de.lueftlotse.ble.transport.FakeGatt.*;
 import static org.junit.Assert.*;
 
 public class GattTransportTest {
+    @Test public void liveTimestampIsFinalFrameArrivalNotDelayedQueueProcessing() {
+        Harness h = new Harness(); h.ready(); h.loop.time = 100;
+        for (byte[] frame : Wire.fragment(sample(1), h.link.eventId++, Wire.Direction.EVENTS)) h.link.callback.events(frame);
+        h.loop.time = 900; h.loop.run(); assertEquals(Long.valueOf(100), h.receivedTimes.get(0));
+        h.loop.advance(1000); assertEquals(Collections.singletonList(100L), h.receivedTimes);
+    }
     @Test public void connectDiscoveryInfoCccdAndHandshakeAreStrictlySequential() {
         Harness h = new Harness(); h.start(); assertEquals(Collections.singletonList("connect"), h.boundary.calls);
         h.link.connected(); assertEquals("discover", h.link.pending); h.link.discovered(); assertEquals("info", h.link.pending);
