@@ -25,10 +25,17 @@ public final class GuardedBluetoothLePlugin extends Plugin {
         catch (Exception error) { call.reject("BLE-Aufruf fehlgeschlagen", error); }
     }
     @PluginMethod public void connect(PluginCall call) {
+        LegacyBleGate.Attempt attempt;
         try {
-            LegacyBleGate.Attempt attempt = gate.connect(call.getString("deviceId"));
-            forward("connect", new ObservedCall(call, () -> gate.connectSettled(attempt), () -> gate.connectSettled(attempt)));
-        } catch (RuntimeException e) { call.reject(e.getMessage()); }
+            attempt = gate.connect(call.getString("deviceId"));
+        } catch (RuntimeException e) { call.reject(e.getMessage()); return; }
+        try {
+            // Admission lease also excludes migration, so its completion cannot race this check.
+            if (BleServiceRuntime.bindings(getContext()).read().migrationComplete) throw new IllegalStateException("Bindung gehört dem nativen Sensor-Dienst");
+        } catch (Exception error) {
+            gate.connectSettled(attempt); gate.disconnected(attempt); call.reject(error.getMessage()); return;
+        }
+        forward("connect", new ObservedCall(call, () -> gate.connectSettled(attempt), () -> gate.connectSettled(attempt)));
     }
     @PluginMethod public void disconnect(PluginCall call) {
         try {

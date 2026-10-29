@@ -69,8 +69,20 @@ and an in-memory LIVE_SAMPLE with its original monotonic receipt time. A quiet
 German service notification has **Trennen**. A native ownership guard rejects a
 second connection across the existing plugin and the service. The installed BLE
 plugin still executes the existing UI's operations; Angular does not start or use
-the new service. No binding migration, auto-start/reconnect, journal bridge or CO₂
-alert has been added. LIVE_SAMPLE is not persisted by either path.
+the new service. Auto-start/reconnect, a journal bridge and CO₂ alerts are not
+implemented. LIVE_SAMPLE is not persisted by either path.
+
+The [native binding migration](android/BLE_BINDING.md) is now implemented as an
+explicit operation. It is not invoked on startup or by the normal UI. It freezes
+the old IndexedDB writer, confirms an atomic native commit, then removes the old
+record. Native state (including a permanent empty/forgotten marker) is authoritative
+after migration; Angular reads it via `BleService`. Legacy BLE connects are then
+blocked until the UI is integrated with the native service. Backup rules exclude
+WebView data, including the old binding, and the native file is in noBackupFilesDir.
+This also excludes history from Android backup and phone transfer: it remains
+locally across normal updates, but is not restored after uninstall/reinstall or
+on a new phone. Backend upload currently has no matching history-restore path.
+The migration document explains this storage limitation and the exact rules.
 
 ## Remembered BLE sensor
 
@@ -93,7 +105,7 @@ devices are disabled during a manual journal download; cancel the download first
 Storage errors are shown explicitly; a failed write is not reported as a saved
 binding, and unreadable/unsupported settings are never silently overwritten.
 
-The binding is a versioned record in the separate IndexedDB database
+Before explicit migration, the binding is a versioned record in the separate IndexedDB database
 `lueftlotse-device`, store `settings`, key `ble-binding`. It survives normal app
 restarts in the same app/WebView origin. Clearing app/site data or uninstalling
 can remove it; it is not Android Bluetooth pairing or a native service preference.

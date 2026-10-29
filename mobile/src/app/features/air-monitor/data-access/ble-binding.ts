@@ -1,18 +1,6 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { uuidBytes } from '../ble-protocol/binary';
 import { BLE_BINDING_STORAGE, BleBinding } from './ble-binding-storage';
-
-function validated(value: unknown): BleBinding | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== 'object') throw new Error('Invalid BLE binding');
-  const binding = value as Partial<BleBinding>;
-  if (binding.version !== 1 || typeof binding.deviceId !== 'string' ||
-      typeof binding.bleAddress !== 'string' || !binding.bleAddress.trim() || binding.bleAddress.length > 256 ||
-      typeof binding.connectionEnabled !== 'boolean') throw new Error('Invalid BLE binding');
-  uuidBytes(binding.deviceId);
-  return Object.freeze({ version: 1, deviceId: binding.deviceId.toLowerCase(),
-    bleAddress: binding.bleAddress, connectionEnabled: binding.connectionEnabled });
-}
+import { validatedBleBinding as validated } from './ble-binding-model';
 
 /** One remembered identity, independent of transport lifetime and preview samples. */
 @Injectable({ providedIn: 'root' })

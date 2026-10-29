@@ -5,15 +5,17 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.os.*;
+import java.io.IOException;
 import java.util.Map;
 
-/** Process state only. No Activity reference, database, saved binding or automatic startup. */
+/** Process session state and one native binding repository. No automatic startup. */
 public final class BleServiceRuntime {
     public static final BleOwnership OWNERSHIP = new BleOwnership();
     static final BleServiceState STATE = new BleServiceState(OWNERSHIP);
     static final Handler MAIN = new Handler(Looper.getMainLooper());
     static final String CHANNEL = "sensor_connection_v1";
     static SensorBleService host;
+    private static NativeBindingRepository bindings;
     private BleServiceRuntime() { }
 
     static void onMain() { if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Service command outside main queue"); }
@@ -41,9 +43,21 @@ public final class BleServiceRuntime {
                 grant(context, "android.permission.POST_NOTIFICATIONS"), notifications);
     }
     static Map<String, Object> snapshot() { onMain(); return STATE.snapshot(SystemClock.elapsedRealtime()); }
-    static void start(Context context, boolean visible, String address, String expected) {
+    static synchronized NativeBindingRepository bindings(Context context) {
+        if (bindings == null) bindings = new NativeBindingRepository(new AndroidBindingStorage(context));
+        return bindings;
+    }
+    static ServiceBindingActions bindingActions(Context context) {
+        onMain(); return new ServiceBindingActions(bindings(context), STATE, BleServiceRuntime::disconnect);
+    }
+    static void start(Context context, boolean visible, String address, String expected) throws IOException {
         onMain(); createChannel(context);
-        BleServiceState.Run run = STATE.reserve(visible, permitted(context), address, expected);
+        NativeBindingRepository.Snapshot saved = bindings(context).requireMigrated();
+        if (saved.binding != null) {
+            if (expected != null && !saved.binding.deviceId.equals(de.lueftlotse.ble.Codec.uuid(expected))) throw new IllegalStateException("BLE binding UUID mismatch");
+            expected = saved.binding.deviceId;
+        }
+        BleServiceState.Run run = STATE.reserve(visible, permitted(context), address, expected, saved.revision);
         Intent intent = new Intent(context, SensorBleService.class).setAction(SensorBleService.START).putExtra("runId", run.id);
         try {
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent); else context.startService(intent);

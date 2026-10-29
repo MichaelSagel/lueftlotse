@@ -4,8 +4,9 @@ This module implements [BLE protocol v1.0/v1.1](../../../docs/ble-protocol-v1.md
 without Android, GATT, Capacitor, WebView or storage APIs. It is included as a
 Gradle project for compilation/tests and is a transitive service dependency.
 The running application still uses `BleConnection` behind `BLE_SESSION`.
-Binding ownership remains in the existing IndexedDB store. This module itself
-does not implement service lifecycle, storage, reconnect or binding migration.
+The normal UI keeps its IndexedDB binding until the explicit
+[native migration](../BLE_BINDING.md). This core itself does not implement
+service lifecycle, storage, reconnect or binding migration.
 
 The separate [Android GATT transport](../ble-gatt-transport/README.md) now implements
 an opt-in owner around this core, with fake-boundary JVM tests. The explicit

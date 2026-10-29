@@ -8,8 +8,11 @@ A null restart intent does not open GATT. Process death loses state and the samp
 
 This is an opt-in native foundation. Angular still uses `BleConnection` behind
 `BLE_SESSION`, including its existing background-disconnect behavior and manual
-journal download. It does not call `BleService`. The saved binding remains solely
-in IndexedDB: the service reads/writes no binding, connection intent or history.
+journal download. Normal startup does not call `BleService`. Before explicit
+migration, the working UI's binding remains in IndexedDB. The
+[native repository and opt-in migration](BLE_BINDING.md) now provide the service's
+persistent binding owner. A native service start requires completed migration,
+including a confirmed empty binding. The service persists no history or preview.
 The service exposes no FETCH, commit or ACK method at this stage. The existing
 commit → ACK → matching ACK_ACCEPTED contract remains in the core and Angular.
 Future WebView integration must use the same service transport and revoke journal
@@ -26,6 +29,8 @@ admission and confirmed cleanup are wrapped. No node_modules patch is required.
 
 A second service start, legacy connect while service-owned, and service start
 while legacy-owned are rejected. Ownership includes connecting and stopping.
+After completed migration all legacy connects are rejected, including after an
+app restart; the old path cannot become a second binding writer or GATT owner.
 A failed legacy connect keeps its lease until native disconnect succeeds and
 connect has settled. Activity destruction queues cleanup of only that legacy
 instance before Capacitor's worker quits. If cleanup cannot be confirmed, the
@@ -72,25 +77,33 @@ The low-importance channel **Sensor-Verbindung** has no sound, vibration or badg
 The ongoing notification is **Lüftlotse Sensor**, initially **Verbindung wird
 hergestellt**, then **Sensor verbunden** after handshake. Its **Trennen** action
 targets the non-exported service with an immutable PendingIntent and the runId.
-It closes that session and never schedules reconnect. This notification reports
+It persists disabled connection intent before closing that session and never
+schedules reconnect. A storage failure still closes the connection, leaves an
+explicit `bindingError` in state and shows a German error toast for notification
+actions. Bridge actions reject their promise instead of reporting success.
+This notification reports
 the connection; no CO₂-threshold notification exists yet.
 
 ## Local Capacitor bridge
 
 The local plugin is registered as `BleService`. A future caller can use
 `registerPlugin('BleService')` from `@capacitor/core`. There is deliberately no
-Angular provider/adapter selecting it in this stage.
+Angular BLE_SESSION provider/adapter selecting it in this stage. The new binding
+coordinator is available only through explicit calls; it is not started by DI.
 
 | Method | Input / behavior |
 | --- | --- |
 | `requestPermissions()` | Visible Activity only; requests CONNECT on API 31+ and POST_NOTIFICATIONS on API 33+. Resolves state and never starts a service. |
-| `start({ bleAddress, expectedDeviceId? })` | Explicit MAC address; optional Info UUID v4 expectation. Returns starting state with runId; poll getState for handshake completion or error. A UUID mismatch closes without writing any binding. |
+| `start({ bleAddress, expectedDeviceId? })` | Requires completed binding migration. Explicit MAC address; the persisted UUID is enforced, plus any explicit expectation. Returns starting state with runId; poll getState. New identity/address and enabled intent are saved only after STATUS. |
 | `getState()` | Returns a snapshot; no start, new GATT, subscription or persistence. |
-| `disconnect({ runId })` | Mandatory current-run token. Returns stopping/stopped state; poll until cleanup completes. A stale token has no effect. |
+| `disconnect({ runId })` | Mandatory current-run token. Commits disabled intent before closing; storage failure still closes and rejects. Poll until cleanup completes. A stale token has no effect. |
+| `getBinding()` | Confirmed repository snapshot; an IO/decode error rejects, never returns an empty binding. |
+| `migrateBinding({ binding })` | One-time import or explicit null; returns the existing snapshot after completion. See the migration coordinator contract. |
+| `forgetBinding({ revision })` | Persists an empty migrated record, then closes the native session. Stale revisions have no effect. |
 
 Snapshot fields: `state` (`stopped`, `starting`, `connecting`, `ready`, `stopping`,
 `error`), `owner` (`none`, `legacy`, `service`), `runId`, `bleAddress`, `deviceId`
-(only after STATUS handshake), `reason`, `permissionsGranted`, `lastSample`,
+(only after STATUS handshake), `reason`, `bindingError`, `permissionsGranted`, `lastSample`,
 `sampleAvailable`, `nowElapsedMs`. No numeric uint64 crosses the bridge.
 
 Example `lastSample` (null until a valid post-handshake preview):

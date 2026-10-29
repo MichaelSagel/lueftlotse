@@ -27,7 +27,11 @@ public final class SensorBleService extends Service {
         if (intent == null) { if (!BleServiceRuntime.STATE.active()) stopSelfResult(id); return START_NOT_STICKY; }
         String token = intent.getStringExtra("runId");
         if (DISCONNECT.equals(intent.getAction())) {
-            BleServiceRuntime.disconnect(token, "Über Benachrichtigung getrennt");
+            try { BleServiceRuntime.bindingActions(this).disconnect(token, "Über Benachrichtigung getrennt"); }
+            catch (Exception error) {
+                android.util.Log.e("SensorBleService", "Verbindungsabsicht nicht gespeichert; Verbindung geschlossen", error);
+                android.widget.Toast.makeText(this, "Verbindung getrennt. Verbindungsabsicht konnte nicht gespeichert werden.", android.widget.Toast.LENGTH_LONG).show();
+            }
             if (!BleServiceRuntime.STATE.active()) stopSelfResult(id);
             return START_NOT_STICKY;
         }
@@ -52,7 +56,7 @@ public final class SensorBleService extends Service {
                 public void event(GattTransport.Connection c, ProtocolSession.Event event) {
                     if (event.kind == ProtocolSession.Kind.READY) c.ready().thenAccept(info -> BleServiceRuntime.MAIN.post(() -> {
                         if (c != connection || !BleServiceRuntime.STATE.matches(token)) return;
-                        BleServiceRuntime.STATE.ready(token, info);
+                        if (!BleServiceRuntime.bindingActions(SensorBleService.this).ready(token, info)) return;
                         if (!destroyed && c.state() == GattTransport.State.READY) getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification("Sensor verbunden"));
                     }));
                     if (event.kind == ProtocolSession.Kind.NOTICE && event.message != null && event.message.type == 0xff && event.message.number("code") == 7) {
