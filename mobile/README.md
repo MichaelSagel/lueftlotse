@@ -20,16 +20,22 @@ chart/history or HTTP synchronization. **Journalmessungen herunterladen** remain
 a separate manual operation for persistent journal records. Existing history,
 including earlier simulator records, remains available for viewing and manual
 synchronization. The page and DeviceDiscovery share the same route-scoped BLE
-session. Collapsing discovery preserves it. This Angular path still disconnects
-on backgrounding; automatic connection/reconnect is not implemented. The opt-in
-native service foundation below is not selected by the UI.
+session. On Android the native service keeps this connection when discovery is
+collapsed, the app is backgrounded or the screen is locked. Returning to the UI
+restores the last valid sample with its original age and remaining 15-second
+lifetime; stale data remains unavailable. Automatic connection/reconnect is not
+implemented. Process death, force-stop, radio loss and OEM power management can
+still end the connection; a foreground service is not an unlimited-execution guarantee.
 
 ## Shared BLE session contract
 
 The page's Co2Monitor, DeviceDiscovery and BleJournalSync consume `BLE_SESSION`.
-The route aliases it with `useExisting: BleConnection`: there is still one working
-implementation, one GATT connection and one Events assembler. No native service,
-binding migration, reconnect or notification feature is enabled by this boundary.
+On Android the route selects the same `NativeBleSession` instance for all three:
+`BleService` owns the sole GATT, handshake and Events assembler. The old plugin
+is scan-only; before connect the scanner blocks new searches and awaits confirmed
+stop, including a pending scan launch. In browsers `BrowserBleSession` makes no
+native calls or binding migration. `BleConnection` remains for explicit fake-adapter
+protocol tests, outside production DI.
 
 UI commands use revocable clients. A manual journal run owns an exclusive lease;
 each fetched packet has a token tied to the connection generation, client and
@@ -45,16 +51,15 @@ or an unconfirmed packet closes the connection because this implementation does
 not implement CANCEL_BATCH. Already committed records remain stored. Late commit
 completions and GATT callbacks cannot ACK or disturb a subsequent connection/run.
 
-## Java BLE core, GATT transport and opt-in Android service
+## Java BLE core, GATT transport and Android service
 
 [`android/ble-protocol-core`](android/ble-protocol-core/README.md) contains the
 Android-independent Java codec and protocol session for a single native
 GATT owner. JVM tests use the shared binary vectors and cover generations,
 bounded queues, handshake, LIVE_SAMPLE and commit-token → ACK → ACK_ACCEPTED.
 All uint64 bridge values are decimal strings. The native service depends on it
-through the transport; the Angular `BLE_SESSION` implementation and IndexedDB
-binding owner are unchanged.
-Its README documents the future transport/commit contracts and test/compile
+through the transport; Angular uses the native session bridge and binding repository.
+Its README documents transport/commit contracts and test/compile
 commands that do not package APKs.
 
 [`android/ble-gatt-transport`](android/ble-gatt-transport/README.md) adds an isolated
@@ -67,25 +72,27 @@ The [Android service foundation](android/BLE_SERVICE.md) adds an explicitly star
 It owns the native transport independently of Activity/WebView and exposes state
 and an in-memory LIVE_SAMPLE with its original monotonic receipt time. A quiet
 German service notification has **Trennen**. A native ownership guard rejects a
-second connection across the existing plugin and the service. The installed BLE
-plugin still executes the existing UI's operations; Angular does not start or use
-the new service. Auto-start/reconnect and CO₂ alerts are not implemented.
-LIVE_SAMPLE is not persisted by either path.
+second connection. The installed BLE plugin only scans; its GATT and bonding calls
+are rejected even before migration. The UI requests Bluetooth/notification permissions
+from a visible Activity, then explicitly starts the service. Missing grants prevent
+GATT. Auto-start/reconnect and CO₂ alerts are not implemented. LIVE_SAMPLE is not persisted.
 
 The [manual native journal bridge](android/BLE_JOURNAL_BRIDGE.md) provides one
 WebView lease, bounded BEGIN/ENTRY/END events and an explicit commit-token gate.
-The optional `NativeBleSession` implements `BLE_SESSION`, but is not selected by
-the working route. `BatchReceiver` and the atomic IndexedDB commit remain in
+The selected Android `NativeBleSession` implements `BLE_SESSION`.
+`BatchReceiver` and the atomic IndexedDB commit remain in
 TypeScript; ACK follows commit, and the next FETCH follows matching ACK_ACCEPTED.
 The service stores neither journal data nor a cursor and revokes an unavailable
-WebView's lease. This addition does not activate binding migration.
+WebView's lease. A pending packet/request/ACK that cannot be safely cancelled
+closes the transport without an unconfirmed ACK; otherwise live preview continues.
 
-The [native binding migration](android/BLE_BINDING.md) is now implemented as an
-explicit operation. It is not invoked on startup or by the normal UI. It freezes
+The [native binding migration](android/BLE_BINDING.md) runs once when the first
+Android session client attaches and must succeed before connect. Failure blocks
+connection with a German message and allows explicit retry without fallback. It freezes
 the old IndexedDB writer, confirms an atomic native commit, then removes the old
 record. Native state (including a permanent empty/forgotten marker) is authoritative
-after migration; Angular reads it via `BleService`. Legacy BLE connects are then
-blocked until the UI is integrated with the native service. Backup rules exclude
+after migration; Angular reads it via `BleService`. Migration does not connect
+or download anything. Backup rules exclude
 WebView data, including the old binding, and the native file is in noBackupFilesDir.
 This also excludes history from Android backup and phone transfer: it remains
 locally across normal updates, but is not restored after uninstall/reinstall or
@@ -103,9 +110,12 @@ The saved sensor can be connected explicitly with **Verbinden**, without a scan.
 Every later connection must match the saved Info UUID. A mismatch closes the
 attempt without replacing the binding; choose **Gerät vergessen** before selecting
 a different sensor. The same UUID at a new address updates that address only after
-another successful handshake. **Trennen** closes the session and persists disabled
-intent, even when already disconnected. Backgrounding, radio loss, scope cleanup
-and journal failures close the transport without changing this intent.
+another successful handshake. **Trennen** persists disabled intent before closing
+the session, even when already disconnected or no run survived process restart.
+On persistence failure an existing session still closes and reports the error.
+Notification **Trennen** uses the same durable native action. Backgrounding and
+UI disposal revoke only journal clients. Radio loss or unsafe journal cancellation
+can close the transport without changing intent; no reconnect is scheduled.
 
 **Gerät vergessen** closes the session and removes the binding. It leaves history,
 journal cursors and pending backend synchronization intact. Forgetting and changing
@@ -113,12 +123,13 @@ devices are disabled during a manual journal download; cancel the download first
 Storage errors are shown explicitly; a failed write is not reported as a saved
 binding, and unreadable/unsupported settings are never silently overwritten.
 
-Before explicit migration, the binding is a versioned record in the separate IndexedDB database
-`lueftlotse-device`, store `settings`, key `ble-binding`. It survives normal app
-restarts in the same app/WebView origin. Clearing app/site data or uninstalling
-can remove it; it is not Android Bluetooth pairing or a native service preference.
-Clearing measurement history does not remove it. No LIVE_SAMPLE values, bootId,
-sampleCounter or uptimeMs are stored in this record.
+The old versioned IndexedDB record in `lueftlotse-device`, store `settings`, key
+`ble-binding`, is removed only after confirmed native persistence. The native
+noBackupFilesDir record is then the sole writer/authority, including an empty or
+forgotten migration marker. Clearing measurement history does not remove it.
+No LIVE_SAMPLE values, bootId, sampleCounter or uptimeMs are stored in this record.
+This is an application binding, not Android pairing; system pairing cannot replace
+the application's GATT session, and current firmware does not implement bonding.
 
 Tests recreate the application injector against the same fake IndexedDB to check
 restart persistence, UUID rejection, explicit disconnect/forget, late callbacks,

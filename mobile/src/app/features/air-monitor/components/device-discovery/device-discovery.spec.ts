@@ -118,12 +118,10 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     expect(el.textContent).not.toMatch(/Simulator|Simulation|Datenquelle/);
     expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
   });
-  it('awaits explicit disconnection before connecting to a different device',async()=>{
+  it('requires an explicit Trennen action before selecting a different device',async()=>{
     connection.state.set('ready');connection.phase.set('ready');connection.info.set({deviceId});
-    let finish!:()=>void;connection.disconnect.mockImplementationOnce(async()=>{calls.push('disconnect');await new Promise<void>(r=>finish=r);});
     const {fixture,buttons}=open();buttons()[1].click();await flush();fixture.detectChanges();
-    expect(calls).toEqual(['disconnect']);expect(connection.connect).not.toHaveBeenCalled();
-    finish();await flush();expect(calls).toEqual(['disconnect','connect:ble-b']);
+    expect(buttons()[1].disabled).toBe(true);expect(calls).toEqual([]);expect(connection.connect).not.toHaveBeenCalled();
   });
   it('keeps a ready connection when collapsed and disconnects only through Trennen',async()=>{
     const {fixture,el,buttons}=open();buttons()[0].click();await flush();fixture.detectChanges();
@@ -137,14 +135,16 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
   });
   it.each([['Unsupported Info version','Protokoll v1.0'],['STATUS timed out','Zeitüberschreitung'],['BLE cleanup failed','sicher beendet'],
     ['BLE binding UUID mismatch','stimmt nicht mit dem gespeicherten Sensor überein'],
-    ['BLE binding storage could not be saved','Gerätebindung konnte nicht']])('translates %s and handles rejected promises',async(message,text)=>{
+    ['BLE binding storage could not be saved','Gerätebindung oder Verbindungsabsicht'],
+    ['BLE migration failed: disk error','Verbindung bleibt gesperrt'], ['BLE permissions: denied','Benachrichtigungen erlauben'],
+    ['scan stop uncertain','keine Verbindung gestartet']])('translates %s and handles rejected promises',async(message,text)=>{
     connection.connect.mockRejectedValueOnce(new Error(message));
     const {fixture,el,buttons}=open();buttons()[0].click();await flush();fixture.detectChanges();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain(text);
   });
   it('never starts a replacement if prior cleanup fails and shows asynchronous cleanup errors',async()=>{
     connection.state.set('ready');connection.phase.set('ready');
-    connection.disconnect.mockRejectedValueOnce(new Error('BLE cleanup failed'));
+    connection.error.set('BLE cleanup failed');
     const {fixture,el,buttons}=open();buttons()[1].click();await flush();fixture.detectChanges();
     expect(connection.connect).not.toHaveBeenCalled();expect(el.querySelector('[role="alert"]')?.textContent).toContain('sicher beendet');
     connection.error.set('BLE cleanup failed; session cannot be reused');fixture.detectChanges();
@@ -214,7 +214,7 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     expect(forget.disabled).toBe(true); forget.click(); expect(connection.forgetDevice).not.toHaveBeenCalled();
     journal.running.set(false); connection.forgetDevice.mockRejectedValueOnce(new Error('BLE binding storage could not be removed'));
     fixture.detectChanges(); forget.click(); await flush(); fixture.detectChanges();
-    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Gerätebindung konnte nicht');
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Gerätebindung oder Verbindungsabsicht');
     expect(el.querySelector('.saved-device')).not.toBeNull();
   });
 
@@ -228,9 +228,9 @@ describe('DeviceDiscovery shared journal DI',()=>{
     const fixture=TestBed.createComponent(DeviceDiscovery);
     const injector=fixture.debugElement.injector;
     const journal=injector.get(BleJournalSync) as unknown as {connection:BleConnection;storage:Co2Storage;history:Co2History};
-    expect(journal.connection).toBe(injector.get(BleConnection));
-    expect(injector.get(BLE_SESSION)).toBe(TestBed.inject(BleConnection));
-    expect(injector.get(BleConnection)).toBe(TestBed.inject(BleConnection));
+    expect(journal.connection).toBe(injector.get(BLE_SESSION));
+    expect(injector.get(BLE_SESSION)).toBe(TestBed.inject(BLE_SESSION));
+    expect(TestBed.inject(BleConnection, null)).toBeNull();
     expect(injector.get(BleScanner)).toBe(TestBed.inject(BleScanner));
     expect(injector.get(BleJournalSync)).toBe(TestBed.inject(BleJournalSync));
     expect(journal.storage).toBe(TestBed.inject(Co2Storage));expect(journal.history).toBe(TestBed.inject(Co2History));

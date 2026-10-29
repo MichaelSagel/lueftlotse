@@ -6,9 +6,10 @@ Bluetooth, IndexedDB or application state dependencies. SHA-256 uses Web Crypto.
 ## Shared session and native adapter boundaries
 
 `../data-access/ble-session.ts` defines the application-facing `BLE_SESSION`
-contract. The route provides `{ provide: BLE_SESSION, useExisting: BleConnection }`;
-Co2Monitor (the page's preview), DeviceDiscovery and BleJournalSync all consume
-that alias. There is no second provider creating a GATT owner. Read-only session
+contract. On Android the route selects one `NativeBleSession`; Co2Monitor (the
+page's preview), DeviceDiscovery and BleJournalSync all consume that instance.
+Only BleService owns GATT. The browser implementation makes no native calls.
+Read-only session
 signals/preview are separate from `attachClient()` command capabilities.
 
 Client IDs and lease IDs are opaque tokens. Each connection has a fresh generation
@@ -16,19 +17,21 @@ string, and each fetched packet a one-use ticket bound to that generation/client
 lease. Revoke a client on scope disposal; revoke a download through its AbortSignal
 or lease. Late calls, queued writes and packet confirmations recheck ownership.
 Old release/close callbacks cannot revoke another lease or close a new connection.
-No native service, migrated settings, reconnect or notifications are implemented.
+The Android service and one-time native binding migration are active; automatic
+connection, reconnect and CO₂ notifications are not implemented.
 
-`../data-access/ble-connection.ts` now implements a separate Angular handshake
-service using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
+`../data-access/ble-connection.ts` remains an explicit fake-adapter implementation
+for protocol tests using the replaceable `BLE_ADAPTER` token. It awaits `BleScanner.stop()`,
 initializes BLE, connects, reads/validates Info v1.0/v1.1, subscribes to Events, then
-sends GET_STATUS and waits for the matching STATUS requestId. The application route
-provides one BleConnection, BleScanner and BleJournalSync shared by the page and
-DeviceDiscovery; the child component does not shadow these providers. Its UI
-shows handshake progress and Info deviceId, explicitly disconnects before switching
-devices, and preserves a ready connection when collapsed. Scanning is disabled
-during connection work and while connected; disconnect first to scan again.
+sends GET_STATUS and waits for the matching STATUS requestId. Production Android
+uses the Java core for these checks through NativeBleSession instead. The route
+shares BleScanner and BleJournalSync; child components do not shadow providers.
+The UI shows progress and Info deviceId and requires explicit disconnect before
+switching devices. Collapsing discovery preserves the connection. Scanning is
+disabled during connection work and while connected; native scan admission and
+confirmed stop also prevent scan/connect races.
 
-`BleBindingStore` keeps one versioned Info UUID / native BLE address /
+In legacy protocol tests, `BleBindingStore` keeps one versioned Info UUID / native BLE address /
 `connectionEnabled` setting in a separate IndexedDB database via the replaceable
 `BLE_BINDING_STORAGE` adapter. Connection waits for settings to load, rejects a
 different Info UUID before subscribing, and commits the binding only after the
@@ -44,7 +47,14 @@ handshake cannot enqueue a new save. New connects are blocked until the explicit
 action settles. Failed persistence still closes the transport and surfaces an
 error. A failed remove retains disabled intent when that preceding write succeeds.
 Unreadable records fail closed; explicit forgetting can remove a corrupt record.
-This is application selection, not pairing/bonding; auto-connect remains absent.
+These legacy implementation checks remain covered by fake-adapter tests. In
+production the native repository is the sole binding writer after one-time
+migration, confirmed before deleting the old IDB record. The native service
+persists identity/address only after STATUS and UUID checks, disabled intent before
+Trennen, and an empty migration marker before forget/close. See
+[native binding](../../../../../android/BLE_BINDING.md) for storage failures,
+retry rules and backup limitations. This is application selection, not
+pairing/bonding; auto-connect remains absent.
 
 Only Android is supported by the default adapter; browser connect rejects before
 scanner/native calls. All known capability subsets are valid for this handshake;
@@ -253,7 +263,7 @@ measurementId, persistence, import, ACK or cursor semantics.
 Shared Info/body/CRC/frame fixtures live in `docs/test-vectors/ble-live-sample-v1.1.json`
 and are consumed by both C++ and `live-sample.spec.ts`.
 
-BleConnection accepts preview only after the matching STATUS handshake and all
+Both the Java core and the legacy BleConnection test implementation accept preview only after the matching STATUS handshake and all
 Control writes complete, with Info minor=1 and capability 0x0010. bootId must match
 the handshake STATUS. sampleCounter must strictly increase and uptimeMs must not
 decrease within the connection; comparisons use bigint. Equal uptime is valid,
@@ -265,7 +275,10 @@ ignored.
 
 The non-replaying `previewEvents` stream emits ready/unavailable transitions and
 validated samples. `Co2Monitor` uses it solely for the current Sensor display,
-which starts empty and waits for a NEW sample (— until then). It maintains
+which starts empty and waits for a new sample (— until then). When an Android
+service session already exists, attach/resume may restore its last sample with
+the original elapsedRealtime receipt timestamp; only its remaining 15-second
+lifetime is used. Duplicate snapshots never rearm the timer. It maintains
 one sample and one 15-second timeout, also while waiting for the first sample
 after readiness. Disconnect/unsupported preview is unavailable immediately;
 15 seconds without an accepted new sample clears the value and shows unavailable.

@@ -6,9 +6,10 @@ import { BleBinding } from './ble-binding-storage';
 
 export type BleStatus = Extract<Message, { type: 0x80 }>;
 export type LiveSample = Extract<Message, { type: 0x8a }>;
-export type PreviewEvent = { kind: 'ready' } | { kind: 'unavailable' } | { kind: 'sample'; sample: LiveSample };
+export type PreviewEvent = { kind: 'ready' } | { kind: 'unavailable'; reason?: 'stale' | 'error' } |
+  { kind: 'sample'; sample: LiveSample; ageMs?: number };
 export type BleState = 'idle' | 'connecting' | 'ready' | 'closing' | 'error';
-export type BlePhase = Exclude<BleState, 'connecting'> | 'scan-stop' | 'initialize' | 'connect' | 'info' | 'subscribe' | 'status';
+export type BlePhase = Exclude<BleState, 'connecting'> | 'scan-stop' | 'migrate' | 'permissions' | 'initialize' | 'connect' | 'info' | 'subscribe' | 'status';
 export class BleCommandError extends Error {
   constructor(readonly code: number) { super('BLE protocol error ' + code); }
 }
@@ -64,5 +65,5 @@ export interface BleSession {
   attachClient(): BleSessionClient;
 }
 
-/** Provided with useExisting: BleConnection at the application route. */
+/** Android selects NativeBleSession; browsers select a session without native dependencies. */
 export const BLE_SESSION = new InjectionToken<BleSession>('BLE_SESSION');

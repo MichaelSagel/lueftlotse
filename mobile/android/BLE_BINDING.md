@@ -1,11 +1,11 @@
-# Native binding and explicit IndexedDB migration
+# Native binding and one-time IndexedDB migration
 
-This stage adds persistence to `BleService`, without starting migration or the
-service on app startup. The route still provides `BLE_SESSION = BleConnection`;
-discovery, manual journal download and the UI are not switched to the service.
-`NativeBleBinding` is an opt-in Angular coordinator/reader with no constructor IO.
-Do not invoke migration in the normal UI until that UI uses the native session:
-once migrated, the legacy plugin rejects connections and old IDB writes reject.
+On Android, `NativeBleSession` is the route's only `BLE_SESSION`. It invokes
+`NativeBleBinding.migrate()` when the first UI client attaches and awaits successful
+migration before every explicit connection. Constructors have no IO. Failure
+blocks connection and is reported in German; another explicit attempt can retry
+the idempotent operation. No fallback transport is used. Browser sessions cannot
+call the native bridge or migrate. Migration never starts the BLE service.
 
 ## One persistent owner
 
@@ -46,6 +46,7 @@ The local `BleService` plugin exposes:
 | `migrateBinding({binding})` | Import `{version:1, deviceId, bleAddress, connectionEnabled}` or explicit null once. Requires an idle ownership slot for the first import. After completion return current native state, ignoring old candidates. |
 | `forgetBinding({revision})` | Compare the decimal revision, persist an empty migrated record, close the native session. An old revision cannot forget or close a newer session. |
 | `disconnect({runId})` | Persist disabled intent, then close that run. The same run token can disable intent after radio loss; a token from an older run has no effect. |
+| `disconnect({revision})` | When the process has no run, compare the binding revision and disable saved intent. Cannot affect a current/newer run. |
 
 `NativeBleBinding.migrate()` is the only coordinator for deleting the old record:
 
@@ -72,19 +73,19 @@ data and finish its deletion. An interrupted migration can be explicitly resumed
 | IDB deletion completed, final read/reply failed | Read native state again; repeated deletion is harmless. |
 | Forget followed by an old migration request | Native tombstone wins; the old device cannot be restored. |
 
-Before explicit migration ordinary IndexedDB IO remains local and does not call
+Before migration ordinary IndexedDB IO remains local and does not call
 the native bridge. After the writer fence, legacy reads go through BleService;
 while migration is pending they report that explicit resume is required. Legacy
-write/remove never silently fall back. The native connect guard checks the native
-marker while holding its admission lease, so it cannot race the first import.
+write/remove never silently fall back. Service start requires the completed native
+marker. The old plugin rejects all GATT methods regardless of migration state.
 Migration does not open GATT, request permissions, connect, fetch or ACK anything.
 
 `NativeBleBinding.refresh()` reads native state; `forget()` calls the native
 revision-checked operation and only then removes any leftover legacy record.
 If forget is the first operation before migration, it first fences the old writer
 in the same way as migration. Failed forget retains that fence for explicit retry.
-Its state/error signals report storage failures. These methods are not wired to
-startup, the page, discovery or a native BLE_SESSION adapter in this stage.
+Its state/error signals report storage failures. The selected Android session
+uses this coordinator for migration, binding reads and **Gerät vergessen**.
 
 ## Disconnect, forget and failures
 
@@ -100,7 +101,8 @@ No reconnection is scheduled.
 then closes/revokes the session, including a pending handshake. A storage failure
 still closes and reports failure while retaining whatever was durably committed.
 An old revision is rejected without closing a newer session. A process restart
-reloads the native record; it does not trigger migration or connection.
+reloads the native record; attaching the UI finishes any interrupted migration,
+but does not trigger connection. A ready native run is only observed on reattach.
 
 ## Backup and reinstall
 

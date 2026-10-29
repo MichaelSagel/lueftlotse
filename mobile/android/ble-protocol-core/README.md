@@ -3,15 +3,14 @@
 This module implements [BLE protocol v1.0/v1.1](../../../docs/ble-protocol-v1.md)
 without Android, GATT, Capacitor, WebView or storage APIs. It is included as a
 Gradle project for compilation/tests and is a transitive service dependency.
-The running application still uses `BleConnection` behind `BLE_SESSION`.
-The normal UI keeps its IndexedDB binding until the explicit
-[native migration](../BLE_BINDING.md). This core itself does not implement
+The Android application uses `NativeBleSession` behind `BLE_SESSION`, with one-time
+[native migration](../BLE_BINDING.md) before connection. This core itself does not implement
 service lifecycle, storage, reconnect or binding migration.
 
 The separate [Android GATT transport](../ble-gatt-transport/README.md) now implements
-an opt-in owner around this core, with fake-boundary JVM tests. The explicit
-[Android service](../BLE_SERVICE.md) now owns that transport, without switching
-Angular to it. This core's wire formats and public session API are unchanged.
+the owner around this core, with fake-boundary JVM tests. The explicitly started
+[Android service](../BLE_SERVICE.md) owns that transport for the Angular adapter.
+This core's wire formats and public session API are unchanged.
 
 The production code has no external dependencies and targets Java 8 bytecode/APIs
 with the installed JDK 21. Its Java APIs are available at the application's

@@ -25,6 +25,21 @@ describe('BleScanner', () => {
     await TestBed.inject(BleScanner).start();
     expect(BleClient.initialize).not.toHaveBeenCalled();
   });
+  it('holds new searches until connect finishes and confirms an unknown previous WebView scan', async () => {
+    let finish!: () => void;
+    vi.mocked(BleClient.stopLEScan).mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    const holding = scanner.holdStopped(); await vi.waitFor(() => expect(finish).toBeDefined());
+    await scanner.start(); expect(BleClient.requestLEScan).not.toHaveBeenCalled();
+    finish(); const release = await holding; await scanner.start(); expect(BleClient.requestLEScan).not.toHaveBeenCalled();
+    release(); release(); await scanner.start(); expect(BleClient.requestLEScan).toHaveBeenCalledOnce();
+  });
+  it('requires confirmed cleanup after a rejected native scan launch', async () => {
+    vi.mocked(BleClient.requestLEScan).mockRejectedValueOnce(new Error('uncertain launch'));
+    vi.mocked(BleClient.stopLEScan).mockRejectedValueOnce(new Error('uncertain stop')).mockRejectedValueOnce(new Error('uncertain stop'));
+    await scanner.start(); expect(scanner.state()).toBe('error');
+    await expect(scanner.holdStopped()).rejects.toThrow('uncertain stop');
+    const release = await scanner.holdStopped(); release(); expect(BleClient.stopLEScan).toHaveBeenCalledTimes(4);
+  });
   it('starts only explicitly, uses no location or UUID filter and deduplicates devices', async () => {
     expect(BleClient.initialize).not.toHaveBeenCalled();
     await scanner.start();

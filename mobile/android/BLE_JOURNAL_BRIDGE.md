@@ -1,10 +1,9 @@
 # Explicit WebView journal bridge
 
-This stage adds a manual journal bridge to the existing `BleService` GATT owner.
-It does not select `NativeBleSession` in the application route, start the service,
-migrate a binding, reconnect, or change firmware. The working route still uses
-`BLE_SESSION = BleConnection`. The native adapter requires an already explicitly
-completed binding migration; it never calls `migrateBinding` itself.
+The Android route selects `NativeBleSession` for the page, discovery and manual
+journal download through the single `BleService` GATT owner. The adapter runs
+one-time binding migration before explicit connection. It never starts a download
+or connection automatically. Browser sessions make no native calls.
 
 ## Ownership and bounded delivery
 
@@ -83,21 +82,23 @@ that is durable local data, with no permission to send a stale ACK.
 discovery and `BleJournalSync`, with local client revocation and a single lease.
 Its construction does no bridge IO. It only polls service state while attached
 clients exist; it never creates GATT. Snapshot previews are volatile, are not
-replayed on attach/resume, and retain native freshness checks. `closeSession`
+saved to history. On attach/resume they retain the original native receipt time
+and only the remaining freshness window; expired data stays unavailable. `closeSession`
 cancels a captured run without changing connection intent; explicit `disconnect`
 continues to persist disabled intent before close.
 
-## Checks and remaining integration
+## Checks and device verification
 
 JVM tests drive the real core through a fake transport: single ownership, early
 responses, BEGIN/ENTRY/END, full uint64, commit gating, wrong metadata, one-use
 tokens, client expiry, stale generations and lost ACK_ACCEPTED. Mobile tests use
 the real BatchReceiver and fake-indexeddb transactions, and also run the existing
-BleJournalSync over the optional adapter. They cover revocation during commit,
-late acquisition/events, heartbeat loss and preview non-persistence.
+BleJournalSync over the selected adapter. They cover shared platform DI, migration
+failure/retry, scan-stop ordering, revocation during commit, late acquisition/events,
+heartbeat loss, original preview age on resume and preview non-persistence.
 
 Run the full mobile tests and production build, then the JVM/Android compile
 command in [BLE_SERVICE.md](BLE_SERVICE.md#verification-and-limits). These commands
 do not package an APK. Actual WebView destruction, screen lock, radio loss and
-on-device transfer still require a later authorized device test. Activating the
-native DI adapter and migration remains a separate stage.
+on-device transfer still require a later authorized device test. Automatic
+connection, reconnect and CO₂ notifications are not implemented.

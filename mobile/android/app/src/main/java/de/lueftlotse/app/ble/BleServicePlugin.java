@@ -10,7 +10,7 @@ import de.lueftlotse.ble.Codec;
 import de.lueftlotse.ble.UInt64;
 import java.util.concurrent.CompletionStage;
 
-/** Explicit local bridge. No migration/start is invoked by application startup. */
+/** Local bridge. The Android UI coordinates migration; starting a connection is always explicit. */
 @CapacitorPlugin(name = "BleService", permissions = {
     @Permission(alias = "bleConnect", strings = {"android.permission.BLUETOOTH_CONNECT"}),
     @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"})
@@ -35,9 +35,12 @@ public final class BleServicePlugin extends Plugin {
     @PluginMethod public void disconnect(PluginCall call) {
         BleServiceRuntime.MAIN.post(() -> {
             String id = call.getString("runId");
-            // A mandatory run token prevents a stale page or notification stopping a later connection.
-            if (id == null) { call.reject("runId fehlt"); return; }
-            try { BleServiceRuntime.bindingActions(getContext()).disconnect(id, "Vom Benutzer getrennt"); resolveState(call); }
+            // A run token, or a checked revision when this process has no run, fences stale pages.
+            try {
+                if (id == null) BleServiceRuntime.bindingActions(getContext()).disconnectSaved(NativeBindingRepository.revision(call.getString("revision")));
+                else BleServiceRuntime.bindingActions(getContext()).disconnect(id, "Vom Benutzer getrennt");
+                resolveState(call);
+            }
             catch (Exception error) { call.reject("Verbindung geschlossen; Verbindungsabsicht nicht gespeichert", error); }
         });
     }

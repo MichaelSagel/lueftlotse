@@ -1,4 +1,4 @@
-# Explicit Android BLE foreground service foundation
+# Android BLE foreground service
 
 `SensorBleService` owns one `GattTransport` / Java `ProtocolSession`. The service
 is started, unbound, non-exported and uses `connectedDevice`; it holds no Activity
@@ -6,35 +6,41 @@ or WebView reference. Activity recreation or dismissal does not close its sessio
 It uses `START_NOT_STICKY`, no boot receiver and no automatic connection/reconnect.
 A null restart intent does not open GATT. Process death loses state and the sample.
 
-This is an opt-in native foundation. Angular still uses `BleConnection` behind
-`BLE_SESSION`, including its existing background-disconnect behavior and manual
-journal download. Normal startup does not call `BleService`. Before explicit
-migration, the working UI's binding remains in IndexedDB. The
-[native repository and opt-in migration](BLE_BINDING.md) now provide the service's
-persistent binding owner. A native service start requires completed migration,
-including a confirmed empty binding. The service persists no history or preview.
-The service exposes no FETCH, commit or ACK method at this stage. The existing
-commit → ACK → matching ACK_ACCEPTED contract remains in the core and Angular.
-Future WebView integration must use the same service transport and revoke journal
-leases on client loss; receiving LIVE_SAMPLE needs no WebView or storage.
+On Android the route selects `NativeBleSession` as the only `BLE_SESSION` for the
+page, discovery and manual journal download. Attaching the first UI reader runs
+the idempotent [binding migration](BLE_BINDING.md), including a confirmed empty
+binding. Migration/read/deletion errors block connection with a German message;
+there is no fallback transport. Migration never starts GATT. **Verbinden** is the
+only connection trigger. Browser routes select `BrowserBleSession`: history
+remains accessible, but native calls and migration are forbidden.
+
+The service receives LIVE_SAMPLE independently of the WebView, without storing
+it. [Manual download](BLE_JOURNAL_BRIDGE.md) uses the same transport and retains
+the TypeScript atomic IndexedDB commit → ACK → matching ACK_ACCEPTED contract.
 
 ## Ownership, ordering and cleanup
 
 The process-wide `BleOwnership` lease is shared by the service and
 `GuardedBluetoothLePlugin`. MainActivity appends the guard after auto-discovery
 and before Capacitor loads JavaScript; startup checks it replaced `BluetoothLe`.
-It delegates to the installed plugin instance (including listeners and permission
-launchers), preserving its native method/permission metadata. Only connection
-admission and confirmed cleanup are wrapped. No node_modules patch is required.
+It delegates scan initialization, permissions and listeners to the installed
+plugin, preserving method/permission metadata. Every legacy GATT/bonding method
+is rejected before delegation, even before migration. No node_modules patch is
+required. `BleConnection` remains only for explicit fake-adapter protocol tests.
 
-A second service start, legacy connect while service-owned, and service start
-while legacy-owned are rejected. Ownership includes connecting and stopping.
-After completed migration all legacy connects are rejected, including after an
-app restart; the old path cannot become a second binding writer or GATT owner.
-A failed legacy connect keeps its lease until native disconnect succeeds and
-connect has settled. Activity destruction queues cleanup of only that legacy
-instance before Capacitor's worker quits. If cleanup cannot be confirmed, the
-lease stays occupied until process restart; creating another GATT is unsafe.
+`BleScanner.holdStopped()` blocks new searches, waits for a pending scan launch,
+and awaits native stop before permissions/start. `ScanGate` also holds native
+admission while a scan is launching/active or its stop is uncertain. The installed
+BLE plugin 8.3.0 swallows IllegalStateException in stopLEScan, so the local guard
+calls its public DeviceScanner.stopScanning directly through the pinned private
+deviceScanner field. Reflection contract tests check this dependency; review it
+on plugin upgrades (release currently has minification disabled). A successful
+Android stopScan return is the available API confirmation; Android supplies no
+separate radio-completion callback. Exceptions reject stop and retain admission.
+An uncertain stop cannot start GATT. Activity destruction only cleans its scanner;
+it never disconnects the service. Failed cleanup retains ownership until confirmed
+cleanup or process restart. A second service start is rejected throughout connect,
+ready and cleanup.
 
 Bridge commands, service intents, state updates and cleanup callbacks are
 serialized on Android's main looper. Only the transport's HandlerThread accesses
@@ -65,6 +71,7 @@ to an explicit address and does not scan or pair. Grants and notification/channe
 availability are checked before reserving a run and again inside the service,
 before creating the transport. Missing permission means no GATT is opened.
 
+The UI calls `requestPermissions` from the visible Activity before `start`.
 `start` requires a RESUMED Activity and never requests permissions implicitly.
 The service promptly calls `startForeground` before connecting. These choices
 follow Android's [foreground service launch rules](https://developer.android.com/develop/background-work/services/fgs/launch)
@@ -86,25 +93,26 @@ the connection; no CO₂-threshold notification exists yet.
 
 ## Local Capacitor bridge
 
-The local plugin is registered as `BleService`. A future caller can use
-`registerPlugin('BleService')` from `@capacitor/core`. There is deliberately no
-Angular BLE_SESSION provider/adapter selecting it in this stage. The new binding
-coordinator is available only through explicit calls; it is not started by DI.
+The local plugin is registered as `BleService`. The selected Android
+`NativeBleSession` and `NativeBleBinding` share this bridge. Constructors have no
+IO; first client attachment migrates/reads and polls, but never connects.
 
 | Method | Input / behavior |
 | --- | --- |
 | `requestPermissions()` | Visible Activity only; requests CONNECT on API 31+ and POST_NOTIFICATIONS on API 33+. Resolves state and never starts a service. |
 | `start({ bleAddress, expectedDeviceId? })` | Requires completed binding migration. Explicit MAC address; the persisted UUID is enforced, plus any explicit expectation. Returns starting state with runId; poll getState. New identity/address and enabled intent are saved only after STATUS. |
 | `getState()` | Returns a snapshot; no start, new GATT, subscription or persistence. |
-| `disconnect({ runId })` | Mandatory current-run token. Commits disabled intent before closing; storage failure still closes and rejects. Poll until cleanup completes. A stale token has no effect. |
+| `disconnect({ runId })` or `disconnect({ revision })` | Current-run token, or checked binding revision only when no run exists after process restart. Commits disabled intent before closing; storage failure still closes an existing run and rejects. Poll until cleanup completes. Stale tokens/revisions cannot stop a newer run. |
 | `getBinding()` | Confirmed repository snapshot; an IO/decode error rejects, never returns an empty binding. |
 | `migrateBinding({ binding })` | One-time import or explicit null; returns the existing snapshot after completion. See the migration coordinator contract. |
 | `forgetBinding({ revision })` | Persists an empty migrated record, then closes the native session. Stale revisions have no effect. |
 
-The [manual journal bridge](BLE_JOURNAL_BRIDGE.md) now exposes an exclusive WebView
-lease and commit-token/ACK handshake over this same transport. The optional
-`NativeBleSession` adapter is not selected in the working Angular DI. There is no
-automatic migration or native journal persistence.
+The [manual journal bridge](BLE_JOURNAL_BRIDGE.md) exposes an exclusive WebView
+lease and commit-token/ACK handshake over this same transport. Hiding/destroying
+the WebView revokes only its journal client. If journal cancellation cannot be
+safe (a request/packet/ACK is pending), the core closes the connection without
+an unconfirmed ACK. With no pending download, backgrounding or screen lock keeps
+the service connection; collapsing discovery never disconnects it.
 
 Snapshot fields: `state` (`stopped`, `starting`, `connecting`, `ready`, `stopping`,
 `error`), `owner` (`none`, `legacy`, `service`), `runId`, `bleAddress`, `deviceId`
@@ -131,7 +139,11 @@ the final Events fragment arrived, before the transport queue processes it. This
 clock includes sleep and is not wall time. `nowElapsedMs` uses the same clock.
 Both times and all wire uint64 values are decimal strings; JS callers use BigInt
 for arithmetic. Repeated getState calls return the same cached sample timestamp.
-No Date.now()/delivery time is substituted on Activity recreation.
+No Date.now()/delivery time is substituted on Activity recreation. On resume or
+reader reattachment the UI can display that cached sample only for its remaining
+15-second lifetime, computed with BigInt native time differences plus conservative
+bridge transit time. Duplicate state reads do not restart its timer. An expired
+sample remains unavailable; no new sample timestamp is invented.
 
 The sample is available only while ready, before 15 seconds have elapsed, and
 until a SENSOR_ERROR notice. A new valid sample restores availability. Disconnect

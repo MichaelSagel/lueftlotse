@@ -32,6 +32,7 @@ export class BleScanner {
   private launch?: Promise<void>;
   private stopOperation?: Promise<void>;
   private destroyed = false;
+  private holds = 0;
   private readonly onVisibility = () => { if (this.document.hidden) void this.stop().catch(() => {}); };
 
   constructor() {
@@ -44,7 +45,7 @@ export class BleScanner {
   }
 
   start(): Promise<void> {
-    if (this.destroyed || !this.available || this.busy() || this.state() === 'scanning' || this.document.hidden) return Promise.resolve();
+    if (this.destroyed || !this.available || this.holds > 0 || this.busy() || this.state() === 'scanning' || this.document.hidden) return Promise.resolve();
     this.starting.set(true);
     this.launch = this.startScan().finally(() => { this.launch = undefined; this.starting.set(false); });
     return this.launch;
@@ -66,10 +67,10 @@ export class BleScanner {
         return;
       }
       if (!current()) return;
+      this.nativeStarted = true; // A rejected start can still have reached Android; stop must confirm cleanup.
       await BleClient.requestLEScan({ allowDuplicates: true }, result => {
         if (current()) this.receive(result);
       });
-      this.nativeStarted = true;
       if (!current()) return;
       this.timer = setTimeout(() => void this.stop().catch(() => {}), 10_000);
     } catch (error) {
@@ -96,9 +97,20 @@ export class BleScanner {
     return this.stopOperation;
   }
 
-  private stopNative(): Promise<void> {
+  /** Reserve against a new search, drain a pending launch, then confirm even a previous WebView's scan stopped. */
+  async holdStopped(): Promise<() => void> {
+    if (!this.available || this.destroyed) throw new Error('BLE scan unavailable');
+    this.holds++;
+    let released = false;
+    const release = () => { if (!released) { released = true; this.holds--; } };
+    try { await this.stop(); await this.stopNative(true); return release; }
+    catch (error) { release(); throw error; }
+  }
+
+  private stopNative(force = false): Promise<void> {
     if (this.cleanup) return this.cleanup;
-    if (!this.nativeStarted) return Promise.resolve();
+    if (!this.nativeStarted && !force) return Promise.resolve();
+    this.nativeStarted = true;
     this.cleanup = BleClient.stopLEScan()
       .then(() => { this.nativeStarted = false; })
       .catch(error => { this.state.set('error'); throw error; })

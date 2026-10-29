@@ -50,7 +50,7 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
         <ul>
           @for (device of scanner.devices(); track device.id) {
             <li><strong>{{ device.name }}</strong><span>{{ device.id }}</span><span>RSSI: {{ device.rssi ?? '—' }} dBm</span>
-              <button type="button" class="connect" (click)="connect(device.id)" [disabled]="busy() || scanner.busy()">Verbinden</button>
+              <button type="button" class="connect" (click)="connect(device.id)" [disabled]="busy() || scanner.busy() || connection.state() === 'ready'">Verbinden</button>
             </li>
           }
         </ul>
@@ -89,19 +89,23 @@ export class DeviceDiscovery {
   protected readonly expanded = signal(false);
   protected readonly pending = signal(false);
   private readonly actionError = signal<string | null>(null);
-  protected readonly busy = computed(() => this.transferring() || this.pending() || this.connection.state() === 'connecting' || this.connection.phase() === 'closing');
+  protected readonly busy = computed(() => this.transferring() || this.pending() || this.connection.bindingLoading() || this.connection.state() === 'connecting' || this.connection.phase() === 'closing');
   protected readonly phaseText = computed(() => ({
     idle: '', 'scan-stop': 'Suche wird beendet …', initialize: 'Bluetooth wird vorbereitet …',
+    migrate: 'Gespeicherte Gerätebindung wird übernommen …', permissions: 'Bluetooth- und Benachrichtigungsberechtigungen werden geprüft …',
     connect: 'Verbindung wird hergestellt …', info: 'Geräteinformationen und Protokollversion werden geprüft …',
     subscribe: 'Benachrichtigungen werden aktiviert …', status: 'Gerätestatus wird abgefragt …',
-    ready: 'Verbindung bereit.', closing: 'Verbindung wird beendet …', error: 'Verbindung konnte nicht vollständig beendet werden.',
+    ready: 'Verbindung bereit.', closing: 'Verbindung wird beendet …', error: 'Verbindung fehlgeschlagen.',
   })[this.connection.phase()]);
   protected readonly errorText = computed(() => {
     const message = this.connection.bindingError() ?? this.connection.error() ?? this.actionError();
     if (!message) return null;
+    if (/migration failed/i.test(message)) return 'Die gespeicherte Gerätebindung konnte nicht übernommen werden. Die Verbindung bleibt gesperrt. Bitte erneut versuchen oder die App erneut öffnen.';
+    if (/BLE permissions/i.test(message)) return 'Bitte Bluetooth („Geräte in der Nähe“) und Benachrichtigungen erlauben und die Verbindung in der geöffneten App erneut starten.';
+    if (/Suche konnte|Suchstart|scan stop/i.test(message)) return 'Die Suche konnte nicht sicher beendet werden. Es wurde keine Verbindung gestartet. Bitte die Suche stoppen und erneut versuchen.';
     if (/cleanup/i.test(message)) return 'Die Verbindung konnte nicht sicher beendet werden. Bitte die App vollständig schließen und erneut öffnen.';
-    if (/binding UUID mismatch/i.test(message)) return 'Dieses Gerät stimmt nicht mit dem gespeicherten Sensor überein. Die Bindung wurde nicht geändert. Für einen anderen Sensor zuerst „Gerät vergessen“ wählen.';
-    if (/binding storage/i.test(message)) return 'Die Gerätebindung konnte nicht gelesen, gespeichert oder gelöscht werden. Bitte erneut versuchen; eine beschädigte Bindung kann mit „Gerät vergessen“ entfernt werden.';
+    if (/binding UUID mismatch|Info UUID mismatch/i.test(message)) return 'Dieses Gerät stimmt nicht mit dem gespeicherten Sensor überein. Die Bindung wurde nicht geändert. Für einen anderen Sensor zuerst „Gerät vergessen“ wählen.';
+    if (/binding storage|Bindung|Verbindungsabsicht/i.test(message)) return 'Die Gerätebindung oder Verbindungsabsicht konnte nicht gelesen oder gespeichert werden. Die Verbindung wurde gegebenenfalls geschlossen. Bitte erneut versuchen.';
     if (/version|capabilit|Info must|UUID/i.test(message)) return 'Dieses Gerät unterstützt das erwartete Lüftlotse-Protokoll v1.0/v1.1 nicht.';
     if (/timed out|timeout/i.test(message)) return 'Zeitüberschreitung. Das Gerät hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.';
     if (/disconnected/i.test(message)) return 'Die Verbindung zum Gerät wurde unterbrochen.';
@@ -111,10 +115,9 @@ export class DeviceDiscovery {
     if (!this.busy() && this.connection.state() !== 'ready') void this.scanner.start();
   }
   protected async connect(id: string): Promise<void> {
-    if (this.busy() || this.scanner.busy() || !this.scanner.available) return;
+    if (this.busy() || this.scanner.busy() || !this.scanner.available || this.connection.state() === 'ready') return;
     this.pending.set(true); this.actionError.set(null); this.downloadResult.set(null);
     try {
-      await this.client.disconnect();
       await this.client.connect(id);
     } catch (error) { this.actionError.set(error instanceof Error ? error.message : String(error)); }
     finally { this.pending.set(false); }

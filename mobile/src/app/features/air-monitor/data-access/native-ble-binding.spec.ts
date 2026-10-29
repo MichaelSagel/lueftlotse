@@ -4,6 +4,7 @@ import { BleBinding } from './ble-binding-model';
 import { BLE_BINDING_MIGRATION_STORAGE, createBleBindingStorage } from './ble-binding-storage';
 import { BLE_SERVICE_BINDING_BRIDGE, NativeBindingState, validatedNativeBinding } from './ble-service-binding-bridge';
 import { NativeBleBinding } from './native-ble-binding';
+import { ANDROID_BLE } from './ble-platform';
 
 const binding: BleBinding = { version: 1, deviceId: '00112233-4455-4677-8899-aabbccddeeff',
   bleAddress: 'AA:BB:CC:DD:EE:01', connectionEnabled: true };
@@ -24,6 +25,7 @@ describe('Explicit native BLE binding migration', () => {
   };
   function configure() {
     TestBed.configureTestingModule({ providers: [
+      { provide: ANDROID_BLE, useValue: true },
       { provide: BLE_SERVICE_BINDING_BRIDGE, useValue: bridge },
       { provide: BLE_BINDING_MIGRATION_STORAGE, useValue: legacy },
     ] });

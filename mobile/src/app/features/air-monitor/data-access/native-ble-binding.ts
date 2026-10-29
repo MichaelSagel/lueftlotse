@@ -1,11 +1,13 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { BLE_BINDING_MIGRATION_STORAGE } from './ble-binding-storage';
 import { BLE_SERVICE_BINDING_BRIDGE, NativeBindingState, validatedNativeBinding } from './ble-service-binding-bridge';
+import { ANDROID_BLE } from './ble-platform';
 
-/** Opt-in coordinator/reader; construction and application startup perform no migration. */
+/** Android coordinator/reader. NativeBleSession explicitly migrates before connection; construction has no IO. */
 @Injectable({ providedIn: 'root' })
 export class NativeBleBinding {
   private readonly bridge = inject(BLE_SERVICE_BINDING_BRIDGE);
+  private readonly android = inject(ANDROID_BLE);
   private readonly legacy = inject(BLE_BINDING_MIGRATION_STORAGE);
   private readonly value = signal<NativeBindingState | null>(null);
   readonly state = this.value.asReadonly();
@@ -41,6 +43,7 @@ export class NativeBleBinding {
     this.value.set(saved); return saved;
   }
   private enqueue(action: () => Promise<NativeBindingState>): Promise<NativeBindingState> {
+    if (!this.android) return Promise.reject(new Error('Native BLE binding is available only on Android'));
     const result = this.tail.then(action).then(value => { this.error.set(null); return value; }, error => {
       this.error.set(error instanceof Error ? error.message : 'Native binding storage error'); throw error;
     });

@@ -23,7 +23,7 @@ describe('Sensor display and freshness', () => {
     vi.useFakeTimers(); events = new Subject();
     connection = { state: signal('idle'), info: signal(null) };
     TestBed.configureTestingModule({ providers: [Co2Monitor, Co2Simulator,
-      { provide: BLE_SESSION, useValue: { ...connection, previewEvents: events.asObservable() } }] });
+      { provide: BLE_SESSION, useValue: { ...connection, previewEvents: events.asObservable(), attachClient: () => ({ revoke: () => {} }) } }] });
     monitor = TestBed.inject(Co2Monitor); simulator = TestBed.inject(Co2Simulator);
   });
   afterEach(() => {
@@ -65,7 +65,7 @@ describe('Sensor display and freshness', () => {
     TestBed.resetTestingModule();
     ready(); sample();
     TestBed.configureTestingModule({ providers: [Co2Monitor,
-      { provide: BLE_SESSION, useValue: { ...connection, previewEvents: events.asObservable() } }] });
+      { provide: BLE_SESSION, useValue: { ...connection, previewEvents: events.asObservable(), attachClient: () => ({ revoke: () => {} }) } }] });
     monitor = TestBed.inject(Co2Monitor);
     expect(monitor.current()).toBeNull(); expect(monitor.sensorState()).toBe('waiting');
     await vi.advanceTimersByTimeAsync(15000);
@@ -75,5 +75,13 @@ describe('Sensor display and freshness', () => {
   it('unsubscribes and clears timers on scope destruction', () => {
     ready(); sample(); TestBed.resetTestingModule();
     sample(999); expect(monitor.current()).toBeNull(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('expires a resumed sample after its remaining lifetime and rejects an already stale sample', async () => {
+    ready(); const value = { type: 0x8a, bootId: uuid, sampleCounter: 1n, uptimeMs: 5n, ppm: 850 } as const;
+    events.next({ kind: 'sample', sample: value, ageMs: 14000 }); expect(monitor.current()?.ppm).toBe(850);
+    await vi.advanceTimersByTimeAsync(999); expect(monitor.current()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1); expect(monitor.sensorState()).toBe('stale');
+    events.next({ kind: 'sample', sample: value, ageMs: 15000 }); expect(monitor.current()).toBeNull();
+    events.next({ kind: 'unavailable', reason: 'error' }); expect(monitor.sensorState()).toBe('unavailable');
   });
 });

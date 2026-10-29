@@ -3,8 +3,12 @@ package de.lueftlotse.app.ble;
 import com.getcapacitor.*;
 import com.getcapacitor.annotation.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.capacitorjs.community.plugins.bluetoothle.BluetoothLe;
+import com.capacitorjs.community.plugins.bluetoothle.DeviceScanner;
+import java.lang.reflect.Field;
+import java.util.Arrays;
 
-/** Keeps the installed plugin and its listeners/permission launchers; only admission is added. */
+/** Installed plugin is scan-only. Service is the sole GATT owner, regardless of migration state. */
 @CapacitorPlugin(name = "BluetoothLe", permissions = {
     @Permission(alias = "ACCESS_COARSE_LOCATION", strings = {"android.permission.ACCESS_COARSE_LOCATION"}),
     @Permission(alias = "ACCESS_FINE_LOCATION", strings = {"android.permission.ACCESS_FINE_LOCATION"}),
@@ -15,48 +19,42 @@ import java.util.concurrent.atomic.AtomicBoolean;
 })
 public final class GuardedBluetoothLePlugin extends Plugin {
     private PluginHandle delegate;
-    private final LegacyBleGate gate = new LegacyBleGate(BleServiceRuntime.OWNERSHIP);
+    private ScanGate scans;
     @Override public void load() {
         delegate = getBridge().getPlugin("BluetoothLe");
         if (delegate == null || delegate.getInstance() instanceof GuardedBluetoothLePlugin) throw new IllegalStateException("Original BluetoothLe plugin missing");
+        scans = new ScanGate(BleServiceRuntime.OWNERSHIP);
+    }
+    static boolean scanOnlyMethod(String method) {
+        return Arrays.asList("initialize", "isEnabled", "requestLEScan", "stopLEScan", "addListener", "removeListener",
+            "removeAllListeners", "checkPermissions", "requestPermissions").contains(method);
     }
     private void forward(String method, PluginCall call) {
+        if (!scanOnlyMethod(method)) { call.reject("BluetoothLe ist nur für die Suche verfügbar; GATT gehört BleService"); return; }
+        if (Arrays.asList("initialize", "requestPermissions", "requestLEScan").contains(method) &&
+            (getActivity() == null || !getActivity().getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))) {
+            call.reject("Suche und Berechtigungen nur aus sichtbarer Activity"); return;
+        }
         try { delegate.invoke(method, call); }
         catch (Exception error) { call.reject("BLE-Aufruf fehlgeschlagen", error); }
     }
-    @PluginMethod public void connect(PluginCall call) {
-        LegacyBleGate.Attempt attempt;
-        try {
-            attempt = gate.connect(call.getString("deviceId"));
-        } catch (RuntimeException e) { call.reject(e.getMessage()); return; }
-        try {
-            // Admission lease also excludes migration, so its completion cannot race this check.
-            if (BleServiceRuntime.bindings(getContext()).read().migrationComplete) throw new IllegalStateException("Bindung gehört dem nativen Sensor-Dienst");
-        } catch (Exception error) {
-            gate.connectSettled(attempt); gate.disconnected(attempt); call.reject(error.getMessage()); return;
-        }
-        forward("connect", new ObservedCall(call, () -> gate.connectSettled(attempt), () -> gate.connectSettled(attempt)));
-    }
-    @PluginMethod public void disconnect(PluginCall call) {
-        try {
-            LegacyBleGate.Attempt attempt = gate.disconnect(call.getString("deviceId"));
-            forward("disconnect", new ObservedCall(call, () -> gate.disconnected(attempt), () -> { }));
-        } catch (RuntimeException e) { call.reject(e.getMessage()); }
+    @PluginMethod public void connect(PluginCall call) { forward("connect", call); }
+    @PluginMethod public void disconnect(PluginCall call) { forward("disconnect", call); }
+    private void stopConfirmed() throws Exception {
+        ScanGate.Attempt attempt = scans.current();
+        // Installed 8.3.0 stopLEScan swallows IllegalStateException and resolves anyway.
+        // Invoke its scanner directly so exceptions retain admission and reject the bridge call.
+        // The pinned field/type/public method are checked by the JVM contract test.
+        Field field = BluetoothLe.class.getDeclaredField("deviceScanner"); field.setAccessible(true);
+        DeviceScanner scanner = (DeviceScanner) field.get(delegate.getInstance());
+        if (scanner != null) scanner.stopScanning();
+        scans.stopped(attempt);
     }
     @Override protected void handleOnDestroy() {
-        // Bridge.quitSafely() drains this already posted command after any connect invocation.
-        // Only this legacy instance is cleaned; a service-owned lease is never touched.
+        scans.destroy();
         getBridge().execute(() -> {
-            LegacyBleGate.Attempt attempt = gate.destroy();
-            if (attempt == null) return;
-            JSObject data = new JSObject(); data.put("deviceId", attempt.address);
-            forward("disconnect", new PluginCall(null, "BluetoothLe", "native-cleanup", "disconnect", data) {
-                @Override public void resolve() { gate.disconnected(attempt); }
-                @Override public void resolve(JSObject result) { gate.disconnected(attempt); }
-                @Override public void reject(String message, String code, Exception error, JSObject extra) {
-                    // A failed native cleanup keeps the lease reserved. Never guess GATT is closed.
-                }
-            });
+            try { stopConfirmed(); }
+            catch (Exception error) { android.util.Log.e("ScanOnlyBLE", "Scan cleanup uncertain; admission remains blocked", error); }
         });
     }
     private static final class ObservedCall extends PluginCall {
@@ -89,8 +87,16 @@ public final class GuardedBluetoothLePlugin extends Plugin {
     @PluginMethod public void openAppSettings(PluginCall c) { forward("openAppSettings", c); }
     @PluginMethod public void setDisplayStrings(PluginCall c) { forward("setDisplayStrings", c); }
     @PluginMethod public void requestDevice(PluginCall c) { forward("requestDevice", c); }
-    @PluginMethod public void requestLEScan(PluginCall c) { forward("requestLEScan", c); }
-    @PluginMethod public void stopLEScan(PluginCall c) { forward("stopLEScan", c); }
+    @PluginMethod public void requestLEScan(PluginCall c) {
+        try {
+            ScanGate.Attempt attempt = scans.begin();
+            forward("requestLEScan", new ObservedCall(c, () -> scans.settled(attempt), () -> scans.settled(attempt)));
+        } catch (RuntimeException error) { c.reject(error.getMessage(), error); }
+    }
+    @PluginMethod public void stopLEScan(PluginCall c) {
+        try { stopConfirmed(); c.resolve(); }
+        catch (Exception error) { c.reject("Suche konnte nicht sicher beendet werden", error); }
+    }
     @PluginMethod public void getDevices(PluginCall c) { forward("getDevices", c); }
     @PluginMethod public void getConnectedDevices(PluginCall c) { forward("getConnectedDevices", c); }
     @PluginMethod public void getBondedDevices(PluginCall c) { forward("getBondedDevices", c); }

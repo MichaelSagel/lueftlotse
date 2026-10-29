@@ -1,8 +1,8 @@
 import { InjectionToken } from '@angular/core';
-import { PluginListenerHandle, registerPlugin } from '@capacitor/core';
+import { PluginListenerHandle } from '@capacitor/core';
 import { decodeBody, encodeBody, Message } from '../ble-protocol/codec';
 import { uuidBytes } from '../ble-protocol/binary';
-import { BleServiceBindingBridge } from './ble-service-binding-bridge';
+import { BleServiceBindingBridge, nativeBindingBridge } from './ble-service-binding-bridge';
 
 export interface NativeJournalToken { runId: string; generation: string; clientId: string; leaseId: string; }
 export interface NativeJournalEvent {
@@ -16,11 +16,13 @@ export interface NativeServiceState {
   state: 'stopped' | 'starting' | 'connecting' | 'ready' | 'stopping' | 'error';
   runId: string | null; info: unknown; status: unknown; lastSample: unknown;
   sampleAvailable: boolean; nowElapsedMs: string; reason: string | null; bindingError: string | null;
+  permissionsGranted: boolean;
 }
 export interface BleServiceSessionBridge extends BleServiceBindingBridge {
   getState(): Promise<NativeServiceState>;
   start(input: { bleAddress: string; expectedDeviceId?: string }): Promise<NativeServiceState>;
-  disconnect(input: { runId: string }): Promise<NativeServiceState>;
+  disconnect(input: { runId?: string; revision?: string }): Promise<NativeServiceState>;
+  requestPermissions(): Promise<NativeServiceState>;
   closeSession(input: { runId: string }): Promise<NativeServiceState>;
   journalAcquire(input: { runId: string }): Promise<{ token: NativeJournalToken }>;
   journalStatus(input: { token: NativeJournalToken }): Promise<NativeJournalReply>;
@@ -32,7 +34,8 @@ export interface BleServiceSessionBridge extends BleServiceBindingBridge {
   addListener(name: 'journalEvent', receive: (event: NativeJournalEvent) => void): Promise<PluginListenerHandle>;
 }
 export const BLE_SERVICE_SESSION_BRIDGE = new InjectionToken<BleServiceSessionBridge>('BLE_SERVICE_SESSION_BRIDGE', {
-  providedIn: 'root', factory: () => registerPlugin<BleServiceSessionBridge>('BleService'),
+  // One Capacitor proxy for both contracts; the native plugin implements all session methods.
+  providedIn: 'root', factory: () => nativeBindingBridge as BleServiceSessionBridge,
 });
 export function nativeUint64(value: unknown): bigint {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(value) || BigInt(value) > (1n << 64n) - 1n) throw new Error('Expected uint64 decimal string');

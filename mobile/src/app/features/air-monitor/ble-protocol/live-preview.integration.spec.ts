@@ -52,7 +52,9 @@ describe('Shared BLE session and volatile Sensor UI', () => {
       write: vi.fn(async (_, value) => emit({ type: 0x80, requestId: value.getUint16(2, true), bootId: uuid,
         oldest: 0n, latest: 0n, overwrittenThrough: 0n, timeValid: 0, firstUndated: 0n, storageState: 0 })),
     };
-    TestBed.configureTestingModule({ imports: [AirMonitorPage], providers: [...routes[0].providers!, Co2Sync,
+    // Keep the protocol/GATT fake test double explicit; production Android DI uses the native service.
+    TestBed.configureTestingModule({ imports: [AirMonitorPage], providers: [...routes[0].providers!, Co2Sync, BleConnection,
+      { provide: BLE_SESSION, useExisting: BleConnection },
       { provide: BLE_ADAPTER, useValue: adapter }] });
     connection = TestBed.inject(BleConnection); storage = TestBed.inject(Co2Storage); history = TestBed.inject(Co2History);
   });

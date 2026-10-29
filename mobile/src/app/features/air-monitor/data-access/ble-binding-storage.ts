@@ -1,4 +1,5 @@
 import { InjectionToken } from '@angular/core';
+import { Capacitor } from '@capacitor/core';
 import { BleBinding, validatedBleBinding } from './ble-binding-model';
 import { nativeBindingBridge, validatedNativeBinding } from './ble-service-binding-bridge';
 export type { BleBinding } from './ble-binding-model';
@@ -15,7 +16,10 @@ export interface BleBindingMigrationStorage {
 
 /** Separate settings DB. Its writer tombstone is retained after the old record is removed. */
 export function createBleBindingStorage(
-  nativeRead: () => Promise<unknown> = () => nativeBindingBridge.getBinding(),
+  nativeRead: () => Promise<unknown> = () => {
+    if (Capacitor.getPlatform() !== 'android') return Promise.reject(new Error('Native BLE binding is available only on Android'));
+    return nativeBindingBridge.getBinding();
+  },
 ): BleBindingStorage & BleBindingMigrationStorage {
   const key = 'ble-binding', retiredKey = 'ble-binding-native-owner';
   function transaction<T>(mode: IDBTransactionMode,

@@ -33,6 +33,13 @@ final class ServiceBindingActions {
             state.bindingError("Verbindungsabsicht nicht gespeichert: " + error.getMessage()); throw error;
         } finally { close.accept(runId, reason); }
     }
+    void disconnectSaved(BigInteger revision) throws IOException {
+        if (state.current() != null) throw new IllegalStateException("Aktuellen runId zum Trennen verwenden");
+        NativeBindingRepository.Snapshot saved = repository.requireMigrated();
+        if (!saved.revision.equals(revision)) throw new NativeBindingRepository.StaleRevision();
+        try { repository.disableConnection(); state.bindingError(null); }
+        catch (IOException | RuntimeException error) { state.bindingError("Verbindungsabsicht nicht gespeichert: " + error.getMessage()); throw error; }
+    }
     NativeBindingRepository.Snapshot forget(BigInteger revision) throws IOException {
         boolean closeSession = true;
         try {

@@ -74,4 +74,16 @@ public class ServiceBindingActionsTest {
         actions.disconnect(run.id, "Trennen"); BigInteger revision = repo.read().revision;
         actions.disconnect(run.id, "Trennen"); assertEquals(revision, repo.read().revision); assertFalse(repo.read().binding.connectionEnabled);
     }
+    @Test public void trennenAfterProcessRestartDisablesSavedIntentWithoutOpeningGatt() throws Exception {
+        NativeBindingRepository.Snapshot saved = repo.migrate(binding()); disk.trace.clear();
+        actions.disconnectSaved(saved.revision);
+        assertFalse(new NativeBindingRepository(disk).read().binding.connectionEnabled);
+        assertEquals(java.util.Arrays.asList("write"), disk.trace); assertNull(state.current());
+        assertThrows(NativeBindingRepository.StaleRevision.class, () -> actions.disconnectSaved(saved.revision));
+    }
+    @Test public void staleSavedOnlyDisconnectCannotAffectANewRun() throws Exception {
+        BleServiceState.Run run = connecting(true);
+        assertThrows(IllegalStateException.class, () -> actions.disconnectSaved(repo.read().revision));
+        assertTrue(state.matches(run.id)); assertTrue(repo.read().binding.connectionEnabled); assertTrue(disk.trace.isEmpty());
+    }
 }

@@ -8,6 +8,7 @@ import { DeviceDiscovery } from '../components/device-discovery/device-discovery
 import { By } from '@angular/platform-browser';
 import { BLE_ADAPTER, BleAdapter } from '../data-access/ble-adapter';
 import { BleConnection } from '../data-access/ble-connection';
+import { BLE_SESSION } from '../data-access/ble-session';
 import { BleJournalSync } from '../data-access/ble-journal-sync';
 import { BleScanner } from '../data-access/ble-scanner';
 import { Co2Storage } from '../data-access/co2-storage';
@@ -95,6 +96,7 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
     });
     vi.spyOn(BleClient,'stopLEScan').mockImplementation(async()=>{peripheral.log.push('scan-stop');});
     TestBed.configureTestingModule({imports:[AirMonitorPage],providers:[...routes[0].providers!,
+      BleConnection,{provide:BLE_SESSION,useExisting:BleConnection}, // Explicit wire/peripheral fake; production Android uses the native service.
       Co2Simulator,{provide:CO2_SOURCE,useExisting:Co2Simulator},{provide:BLE_ADAPTER,useValue:peripheral}]});
     const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
     const discovery = fixture.debugElement.query(By.directive(DeviceDiscovery));
