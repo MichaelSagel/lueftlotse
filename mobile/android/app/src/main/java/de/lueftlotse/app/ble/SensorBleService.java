@@ -20,6 +20,32 @@ public final class SensorBleService extends Service {
     private String runId;
     private int startId;
     private boolean destroyed;
+    private ServiceJournal journal;
+    private final Runnable journalTick = new Runnable() {
+        public void run() {
+            if (destroyed || journal == null) return;
+            journal.tick(); BleServiceRuntime.MAIN.postDelayed(this, 1000);
+        }
+    };
+
+    ServiceJournal journal(String token) {
+        BleServiceRuntime.onMain();
+        if (journal == null || !BleServiceRuntime.STATE.matches(token) || !token.equals(runId)) throw new IllegalStateException("Native journal unavailable");
+        return journal;
+    }
+    void revokeJournalOwner(String owner) { if (journal != null) journal.revokeOwner(owner); }
+    private void openJournal(String token, String generation, GattTransport.Connection c) {
+        journal = new ServiceJournal(token, generation, new ServiceJournal.Port() {
+            public java.util.concurrent.CompletionStage<String> acquire() { return transport.acquireJournal(c); }
+            public java.util.concurrent.CompletionStage<Integer> status(String lease) { return transport.journalStatus(c, lease); }
+            public java.util.concurrent.CompletionStage<Integer> fetch(String lease, java.math.BigInteger after, int limit) { return transport.fetch(c, lease, after, limit); }
+            public java.util.concurrent.CompletionStage<String> beginCommit(String lease, String batch) { return transport.beginCommit(c, lease, batch); }
+            public java.util.concurrent.CompletionStage<Integer> commit(String lease, String commit) { return transport.commitSucceeded(c, lease, commit); }
+            public java.util.concurrent.CompletionStage<Boolean> revoke(String lease) { return transport.revokeJournal(c, lease); }
+            public void close() { BleServiceRuntime.disconnect(token, "Journal client revoked / uncertain operation"); }
+        }, action -> BleServiceRuntime.MAIN.post(action), SystemClock::elapsedRealtime);
+        BleServiceRuntime.MAIN.post(journalTick);
+    }
 
     @Override public int onStartCommand(Intent intent, int flags, int id) {
         BleServiceRuntime.onMain();
@@ -57,8 +83,15 @@ public final class SensorBleService extends Service {
                     if (event.kind == ProtocolSession.Kind.READY) c.ready().thenAccept(info -> BleServiceRuntime.MAIN.post(() -> {
                         if (c != connection || !BleServiceRuntime.STATE.matches(token)) return;
                         if (!BleServiceRuntime.bindingActions(SensorBleService.this).ready(token, info)) return;
+                        BleServiceRuntime.STATE.protocolStatus(token, event.message);
+                        openJournal(token, event.generation, c);
                         if (!destroyed && c.state() == GattTransport.State.READY) getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification("Sensor verbunden"));
                     }));
+                    if (event.kind != ProtocolSession.Kind.READY) BleServiceRuntime.MAIN.post(() -> {
+                        if (c != connection || !BleServiceRuntime.STATE.matches(token)) return;
+                        if (event.message != null && event.message.type == 0x80) BleServiceRuntime.STATE.protocolStatus(token, event.message);
+                        if (journal != null) journal.event(event);
+                    });
                     if (event.kind == ProtocolSession.Kind.NOTICE && event.message != null && event.message.type == 0xff && event.message.number("code") == 7) {
                         BleServiceRuntime.MAIN.post(() -> { if (c == connection) BleServiceRuntime.STATE.sensorError(token); });
                     }
@@ -85,11 +118,15 @@ public final class SensorBleService extends Service {
     }
     void disconnectRun(String token) {
         BleServiceRuntime.onMain(); if (token == null || !token.equals(runId)) return;
+        if (journal != null) journal.closed("Connection closing");
+        BleServiceRuntime.MAIN.removeCallbacks(journalTick);
         if (connection != null) connection.cancel();
         if (transport != null) transport.close();
     }
     private void closedRun(String token, GattTransport.Connection c, boolean clean, String reason) {
         if (c != connection || !token.equals(runId)) return;
+        if (journal != null) journal.closed(reason);
+        BleServiceRuntime.MAIN.removeCallbacks(journalTick);
         BleServiceRuntime.STATE.closed(token, clean, reason);
         if (transport != null) transport.close();
         if (BleServiceRuntime.host == this) BleServiceRuntime.host = null;

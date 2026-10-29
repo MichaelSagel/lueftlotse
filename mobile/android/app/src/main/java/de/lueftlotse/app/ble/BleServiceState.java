@@ -20,6 +20,7 @@ public final class BleServiceState {
     private Run run;
     private Phase phase = Phase.STOPPED;
     private Codec.Info info;
+    private Codec.Message status;
     private Map<String, Object> sample;
     private boolean sampleValid;
     private String reason;
@@ -36,7 +37,7 @@ public final class BleServiceState {
         if (address == null || !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) throw new IllegalArgumentException("Ungültige BLE-Adresse");
         String expectedId = expected == null ? null : Codec.uuid(expected);
         run = new Run(address, expectedId, ownership.acquire(BleOwnership.Owner.SERVICE), revision);
-        phase = Phase.STARTING; info = null; sample = null; sampleValid = false; reason = null; bindingError = null; return run;
+        phase = Phase.STARTING; info = null; status = null; sample = null; sampleValid = false; reason = null; bindingError = null; return run;
     }
     public synchronized boolean active() { return run != null && ownership.owns(run.lease); }
     public synchronized Run current() { return run; }
@@ -70,6 +71,9 @@ public final class BleServiceState {
         copy.put("receivedAtElapsedMs", Long.toString(arrival)); sample = Collections.unmodifiableMap(copy); receivedAt = arrival;
         sampleValid = true; reason = null;
     }
+    public synchronized void protocolStatus(String id, Codec.Message value) {
+        if (matches(id) && !run.stopping && phase == Phase.READY && value.type == 0x80) status = value;
+    }
     public synchronized void sensorError(String id) {
         if (!matches(id) || run.stopping || phase != Phase.READY) return;
         sampleValid = false; reason = "Sensor meldet einen Messfehler";
@@ -85,6 +89,8 @@ public final class BleServiceState {
         result.put("state", phase.name().toLowerCase(Locale.ROOT)); result.put("owner", ownership.owner());
         result.put("runId", run == null ? null : run.id); result.put("bleAddress", run == null ? null : run.address);
         result.put("deviceId", info == null ? null : info.deviceId); result.put("reason", reason);
+        result.put("info", info == null ? null : ServiceJournal.map("major", info.major, "minor", info.minor, "deviceId", info.deviceId, "capabilities", info.capabilities));
+        result.put("status", status == null ? null : status.toBridge());
         result.put("bindingError", bindingError);
         result.put("lastSample", sample); result.put("nowElapsedMs", Long.toString(now));
         result.put("sampleAvailable", phase == Phase.READY && sampleValid && sample != null && now >= receivedAt && now - receivedAt < 15000);

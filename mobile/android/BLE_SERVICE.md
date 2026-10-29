@@ -101,10 +101,16 @@ coordinator is available only through explicit calls; it is not started by DI.
 | `migrateBinding({ binding })` | One-time import or explicit null; returns the existing snapshot after completion. See the migration coordinator contract. |
 | `forgetBinding({ revision })` | Persists an empty migrated record, then closes the native session. Stale revisions have no effect. |
 
+The [manual journal bridge](BLE_JOURNAL_BRIDGE.md) now exposes an exclusive WebView
+lease and commit-token/ACK handshake over this same transport. The optional
+`NativeBleSession` adapter is not selected in the working Angular DI. There is no
+automatic migration or native journal persistence.
+
 Snapshot fields: `state` (`stopped`, `starting`, `connecting`, `ready`, `stopping`,
 `error`), `owner` (`none`, `legacy`, `service`), `runId`, `bleAddress`, `deviceId`
 (only after STATUS handshake), `reason`, `bindingError`, `permissionsGranted`, `lastSample`,
-`sampleAvailable`, `nowElapsedMs`. No numeric uint64 crosses the bridge.
+`sampleAvailable`, `nowElapsedMs`, negotiated `info`, and correlated `status`.
+No numeric uint64 crosses the bridge.
 
 Example `lastSample` (null until a valid post-handshake preview):
 

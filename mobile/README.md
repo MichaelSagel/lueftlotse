@@ -69,8 +69,16 @@ and an in-memory LIVE_SAMPLE with its original monotonic receipt time. A quiet
 German service notification has **Trennen**. A native ownership guard rejects a
 second connection across the existing plugin and the service. The installed BLE
 plugin still executes the existing UI's operations; Angular does not start or use
-the new service. Auto-start/reconnect, a journal bridge and CO₂ alerts are not
-implemented. LIVE_SAMPLE is not persisted by either path.
+the new service. Auto-start/reconnect and CO₂ alerts are not implemented.
+LIVE_SAMPLE is not persisted by either path.
+
+The [manual native journal bridge](android/BLE_JOURNAL_BRIDGE.md) provides one
+WebView lease, bounded BEGIN/ENTRY/END events and an explicit commit-token gate.
+The optional `NativeBleSession` implements `BLE_SESSION`, but is not selected by
+the working route. `BatchReceiver` and the atomic IndexedDB commit remain in
+TypeScript; ACK follows commit, and the next FETCH follows matching ACK_ACCEPTED.
+The service stores neither journal data nor a cursor and revokes an unavailable
+WebView's lease. This addition does not activate binding migration.
 
 The [native binding migration](android/BLE_BINDING.md) is now implemented as an
 explicit operation. It is not invoked on startup or by the normal UI. It freezes
