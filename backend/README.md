@@ -41,6 +41,20 @@ No migration is applied automatically at startup.
 
 ## Integration tests
 
+`GET /api/measurements?from=2026-02-01T00:00:00Z&to=2026-02-02T00:00:00Z`
+reads PostgreSQL through an EF Core no-tracking projection. Required UTC ISO 8601
+timestamps end in Z (microsecond precision); the period is [from, to), with from
+strictly before to. Optional deviceId is a nonempty UUID. pageSize defaults to 50
+and accepts 1–200. Invalid/duplicate parameters and malformed cursors return 400.
+The response is `{ items: [...], nextCursor: string | null }`; each item contains
+measurementId, deviceId, source, measuredAt, ppm, segment and receivedAt.
+Order is measuredAt DESC, measurementId DESC. Pass nextCursor as the next request's
+cursor parameter with the same device/from/to filters. A null cursor ends traversal.
+Cursors are versioned base64url tokens, bound to those filters, not authentication
+credentials. Page size may change between pages. Pagination is not a database
+snapshot: concurrent inserts ahead of the cursor require a fresh traversal.
+No schema change or automatic migration is involved.
+
 Tests require real PostgreSQL, not Docker or an in-memory substitute. Inject these
 variables into the test process without printing their values:
 

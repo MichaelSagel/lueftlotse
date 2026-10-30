@@ -34,6 +34,7 @@ app.MapGet("/api/health/ready", async Task<IResult> (
 .Produces(StatusCodes.Status503ServiceUnavailable);
 
 app.MapMeasurementEndpoints();
+app.MapGet("/api/measurements", MeasurementHistoryEndpoint.Handle);
 
 app.Run();
 
