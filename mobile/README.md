@@ -29,6 +29,17 @@ still end the connection; a foreground service is not an unlimited-execution gua
 
 ## Shared BLE session contract
 
+**Serververlauf** is a separate, manually loaded PostgreSQL view through
+GET /api/measurements using the existing API address configuration. Local datetime
+inputs are sent as UTC; the table displays local time. The period is [from, to),
+and **Weitere laden** uses nextCursor (50 rows per page). The UI filters only by
+period and displays Zeit, CO₂ and Quelle in a table fitted to the card. Geräte-ID
+and Segment are not displayed; the API DTO and optional device filter remain unchanged.
+Changing filters clears all pages and invalidates pending replies. Server rows
+exist only in memory: no IndexedDB import, local-history merge or backend write.
+Loading, empty results and errors are shown in German. Android uses the same
+configured native HTTP/USB route as synchronization; no server means an explicit error.
+
 In Chrome on Windows, **Sensor auswählen** opens the browser device chooser with
 the Lüftlotse service UUID filter. Use HTTPS or localhost with Web Bluetooth
 available. Cancelling the chooser leaves the session unchanged. The browser uses
