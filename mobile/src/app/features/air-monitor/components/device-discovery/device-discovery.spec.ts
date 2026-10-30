@@ -60,9 +60,9 @@ describe('DeviceDiscovery', () => {
     fixture.detectChanges();
     const element: HTMLElement = fixture.nativeElement;
     element.querySelector('button')!.click(); fixture.detectChanges();
-    expect(element.textContent).toContain('in der Android-App verfügbar');
+    expect(element.textContent).toContain('Sensor auswählen');
     expect(initialize).not.toHaveBeenCalled();
-    expect(element.querySelectorAll('button')).toHaveLength(1);
+    expect(element.querySelectorAll('button')).toHaveLength(3);
   });
 });
 

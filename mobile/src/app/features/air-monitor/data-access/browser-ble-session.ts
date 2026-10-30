@@ -1,26 +1,30 @@
-import { Injectable, signal } from '@angular/core';
-import { EMPTY } from 'rxjs';
-import { BleBinding } from './ble-binding-model';
-import { Info } from '../ble-protocol/codec';
-import { BlePhase, BleSession, BleSessionClient, BleState, BleStatus } from './ble-session';
+import { DestroyRef, Injectable, inject } from '@angular/core';
+import { BleConnection } from './ble-connection';
+import { BleSessionClient } from './ble-session';
 
-/** Browser history remains available. No native plugin, binding migration or transport is injected. */
+/** Reuses the protocol session; browser preview never offers journal download. */
 @Injectable()
-export class BrowserBleSession implements BleSession {
-  readonly state = signal<BleState>('idle');
-  readonly phase = signal<BlePhase>('idle');
-  readonly info = signal<Info | null>(null);
-  readonly status = signal<BleStatus | null>(null);
-  readonly error = signal<string | null>(null);
-  readonly binding = signal<BleBinding | null>(null);
-  readonly bindingError = signal<string | null>(null);
-  readonly bindingLoading = signal(false);
-  readonly previewEvents = EMPTY;
-  attachClient(): BleSessionClient {
-    const client = new AbortController();
-    const unavailable = () => { throw new Error('Bluetooth ist nur in der Android-App verfügbar.'); };
-    return { id: crypto.randomUUID(), signal: client.signal, connect: async () => unavailable(),
-      disconnect: async () => {}, disconnectByUser: async () => {}, forgetDevice: async () => unavailable(),
-      journal: unavailable, revoke: () => client.abort() };
+export class BrowserBleSession extends BleConnection {
+  private receipt?: { monotonic: number; wall: number };
+  constructor() {
+    super();
+    const subscription = this.previewEvents.subscribe(event => {
+      if (event.kind === 'sample' || event.kind === 'ready') {
+        this.receipt = { monotonic: performance.now(), wall: Date.now() };
+      } else if (event.reason !== 'stale') this.receipt = undefined;
+    });
+    inject(DestroyRef).onDestroy(() => subscription.unsubscribe());
+  }
+  protected override visibilityChanged(hidden: boolean): void {
+    // Timers may be throttled in a background tab. Check the original receipt on return.
+    // Wall elapsed also covers platforms whose performance clock pauses during sleep.
+    if (!hidden && this.state() === 'ready' && this.receipt &&
+        Math.max(performance.now() - this.receipt.monotonic, Date.now() - this.receipt.wall) >= 15000) {
+      this.previewExpired();
+    }
+  }
+  override attachClient(): BleSessionClient {
+    const client = super.attachClient();
+    return { ...client, journal: () => { throw new Error('Journaldownload ist im Browser nicht verfügbar.'); } };
   }
 }

@@ -44,9 +44,9 @@ describe('production BLE_SESSION selection', () => {
     const initialize = vi.spyOn(BleClient, 'initialize'); const session = TestBed.inject(BLE_SESSION);
     expect(session).toBe(TestBed.inject(BrowserBleSession)); expect(TestBed.inject(BleConnection, null)).toBeNull();
     const fixture = TestBed.createComponent(DeviceDiscovery); fixture.detectChanges(); TestBed.inject(Co2Monitor);
-    const client = session.attachClient(); await expect(client.connect('AA:BB:CC:DD:EE:01')).rejects.toThrow('Android');
-    await client.disconnect(); await client.disconnectByUser(); expect(() => client.journal()).toThrow('Android');
-    await expect(TestBed.inject(NativeBleBinding).migrate()).rejects.toThrow('Android');
+    const client = session.attachClient(); await expect(client.connect('AA:BB:CC:DD:EE:01')).rejects.toThrow();
+    await client.disconnect(); await client.disconnectByUser(); expect(() => client.journal()).toThrow('Browser');
+    await expect(TestBed.inject(NativeBleBinding).migrate()).rejects.toThrow();
     expect(() => TestBed.inject(NativeBleSession).attachClient()).toThrow('unavailable');
     expect(initialize).not.toHaveBeenCalled(); for (const method of Object.values(bridge)) expect(method).not.toHaveBeenCalled(); fixture.destroy();
   });

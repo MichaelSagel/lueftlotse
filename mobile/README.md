@@ -29,6 +29,18 @@ still end the connection; a foreground service is not an unlimited-execution gua
 
 ## Shared BLE session contract
 
+In Chrome on Windows, **Sensor auswählen** opens the browser device chooser with
+the Lüftlotse service UUID filter. Use HTTPS or localhost with Web Bluetooth
+available. Cancelling the chooser leaves the session unchanged. The browser uses
+WebBluetoothAdapter and BrowserBleSession over the existing BleConnection protocol;
+its binding exists only in memory and its scan barrier is empty. **Trennen** closes
+the connection. Browser journal download is unavailable; LIVE_SAMPLE is never
+stored or uploaded. The existing 15-second freshness timeout remains active.
+Switching tabs preserves the browser connection. Returning checks the original
+sample receipt age even when background timers were throttled; an expired value
+stays unavailable until a new valid LIVE_SAMPLE arrives. This is not a background-service guarantee.
+Android continues to use NativeBleSession and its native binding repository.
+
 The page's Co2Monitor, DeviceDiscovery and BleJournalSync consume `BLE_SESSION`.
 On Android the route selects the same `NativeBleSession` instance for all three:
 `BleService` owns the sole GATT, handshake and Events assembler. The old plugin

@@ -1,3 +1,4 @@
+import { WebBluetoothAdapter } from '../../data-access/web-bluetooth-adapter';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { BleScanner } from '../../data-access/ble-scanner';
 import { BLE_SESSION } from '../../data-access/ble-session';
@@ -55,7 +56,11 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
           }
         </ul>
       } @else {
-        <p>Die BLE-Suche ist in der Android-App verfügbar.</p>
+        <button type="button" (click)="chooseWeb()" [disabled]="pending() || busy() || connection.state() === 'ready'">Sensor auswählen</button>
+        <button type="button" (click)="disconnect()" [disabled]="pending()">Trennen</button>
+        <p role="status">{{ web?.message() }}</p>
+        <p role="alert">{{ web?.error() || errorText() }}</p>
+        <p>{{ phaseText() }}</p>
       }
     </section>
   `,
@@ -72,6 +77,15 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
   `,
 })
 export class DeviceDiscovery {
+  protected readonly web = inject(WebBluetoothAdapter, { optional: true });
+  protected async chooseWeb(): Promise<void> {
+    if (!this.web || this.pending() || this.busy() || this.connection.state() === 'ready') return;
+    const selection = this.web.choose(); // Keep requestDevice inside the user gesture.
+    this.pending.set(true); this.actionError.set(null);
+    try { const id = await selection; if (id) await this.client.connect(id); }
+    catch (error) { this.actionError.set(String(error)); }
+    finally { this.pending.set(false); }
+  }
   protected readonly scanner = inject(BleScanner);
   protected readonly connection = inject(BLE_SESSION);
   private readonly client = this.connection.attachClient();

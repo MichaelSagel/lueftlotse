@@ -1,5 +1,5 @@
 import { DOCUMENT } from '@angular/common';
-import { DestroyRef, Injectable, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, InjectionToken, inject, signal } from '@angular/core';
 import { Subject } from 'rxjs';
 import { decodeInfo, Message, supportsLiveSample } from '../ble-protocol/codec';
 import { FragmentAssembler, fragmentMessage } from '../ble-protocol/fragments';
@@ -8,6 +8,9 @@ import { BleScanner } from './ble-scanner';
 import { BleBindingStore } from './ble-binding';
 import { BleCommandError, BleJournalLease, BleSession, BleSessionClient, BleSessionClosedError, BleStatus, PreviewEvent } from './ble-session';
 import { JournalLease } from './ble-journal-lease';
+
+export const BLE_SCAN_BARRIER = new InjectionToken<Pick<BleScanner, 'stop'>>('BLE_SCAN_BARRIER', { providedIn: 'root', factory: () => inject(BleScanner) });
+export const BLE_CONNECTION_BINDING = new InjectionToken<Pick<BleBindingStore, 'saved' | 'error' | 'loading' | 'ready' | 'assertIdentity' | 'remember' | 'disableConnection' | 'forget'>>('BLE_CONNECTION_BINDING', { providedIn: 'root', factory: () => inject(BleBindingStore) });
 
 type Status = BleStatus;
 type Info = ReturnType<typeof decodeInfo>;
@@ -45,9 +48,9 @@ interface Session {
 @Injectable()
 export class BleConnection implements BleSession {
   private readonly adapter = inject(BLE_ADAPTER);
-  private readonly scanner = inject(BleScanner);
+  private readonly scanner = inject(BLE_SCAN_BARRIER);
   private readonly document = inject(DOCUMENT);
-  private readonly bindings = inject(BleBindingStore);
+  private readonly bindings = inject(BLE_CONNECTION_BINDING);
   readonly binding = this.bindings.saved;
   readonly bindingError = this.bindings.error;
   readonly bindingLoading = this.bindings.loading;
@@ -64,7 +67,12 @@ export class BleConnection implements BleSession {
   private generation = 0n;
   private readonly clients = new Set<AbortController>();
   private destroyed = false;
-  private readonly background = () => { if (this.document.hidden) void this.disconnect().catch(() => {}); };
+  private readonly background = () => this.visibilityChanged(this.document.hidden);
+
+  protected visibilityChanged(hidden: boolean): void {
+    if (hidden) void this.disconnect().catch(() => {});
+  }
+  protected previewExpired(): void { this.preview.next({ kind: 'unavailable', reason: 'stale' }); }
 
   constructor() {
     this.document.addEventListener('visibilitychange', this.background);

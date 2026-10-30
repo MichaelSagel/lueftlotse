@@ -7,6 +7,7 @@ import { AirMonitorPage } from '../air-monitor-page';
 import { DeviceDiscovery } from '../components/device-discovery/device-discovery';
 import { BLE_ADAPTER, BleAdapter } from '../data-access/ble-adapter';
 import { BleConnection } from '../data-access/ble-connection';
+import { BrowserBleSession } from '../data-access/browser-ble-session';
 import { BLE_SESSION, LiveSample } from '../data-access/ble-session';
 import { BleScanner } from '../data-access/ble-scanner';
 import { BleJournalSync } from '../data-access/ble-journal-sync';
@@ -53,8 +54,8 @@ describe('Shared BLE session and volatile Sensor UI', () => {
         oldest: 0n, latest: 0n, overwrittenThrough: 0n, timeValid: 0, firstUndated: 0n, storageState: 0 })),
     };
     // Keep the protocol/GATT fake test double explicit; production Android DI uses the native service.
-    TestBed.configureTestingModule({ imports: [AirMonitorPage], providers: [...routes[0].providers!, Co2Sync, BleConnection,
-      { provide: BLE_SESSION, useExisting: BleConnection },
+    TestBed.configureTestingModule({ imports: [AirMonitorPage], providers: [...routes[0].providers!, Co2Sync,
+      { provide: BleConnection, useExisting: BrowserBleSession },
       { provide: BLE_ADAPTER, useValue: adapter }] });
     connection = TestBed.inject(BleConnection); storage = TestBed.inject(Co2Storage); history = TestBed.inject(Co2History);
   });
@@ -115,6 +116,29 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     await vi.advanceTimersByTimeAsync(10000); await history.whenSettled();
     expect(await storage.count()).toBe(1); expect(source.state().status).toBe('stopped');
     expect(append).not.toHaveBeenCalled(); fixture.destroy();
+  });
+
+  it('keeps GATT across tab switches and expires by original receipt even with throttled timers', async () => {
+    await history.whenSettled();
+    const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
+    const monitor = TestBed.inject(Co2Monitor);
+    await connection.connect('sensor'); emit(sample(1n, 800));
+    const originalTime = Date.now();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(adapter.disconnect).not.toHaveBeenCalled(); expect(connection.state()).toBe('ready');
+    vi.setSystemTime(originalTime + 10000); // Advance age without executing the freshness timer.
+    hidden.mockReturnValue(false); document.dispatchEvent(new Event('visibilitychange'));
+    expect(monitor.current()?.ppm).toBe(800);
+    hidden.mockReturnValue(true); document.dispatchEvent(new Event('visibilitychange'));
+    vi.setSystemTime(originalTime + 16000);
+    hidden.mockReturnValue(false); document.dispatchEvent(new Event('visibilitychange'));
+    expect(monitor.current()).toBeNull(); expect(monitor.sensorState()).toBe('stale');
+    emit(sample(1n, 900)); expect(monitor.current()).toBeNull(); // Duplicate cannot refresh age.
+    emit(sample(2n, 850)); expect(monitor.current()?.ppm).toBe(850);
+    expect(adapter.connect).toHaveBeenCalledOnce(); expect(adapter.disconnect).not.toHaveBeenCalled();
+    await connection.disconnectByUser(); expect(adapter.disconnect).toHaveBeenCalledOnce();
+    fixture.destroy();
   });
 
   it('clears on disconnect, waits for NEW data and ignores obsolete callbacks on reconnect', async () => {
