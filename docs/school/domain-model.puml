@@ -1,0 +1,31 @@
+@startuml
+title Domänenmodell gemäß vorhandenem C#-Code
+hide methods
+skinparam classAttributeIconSize 0
+
+class Measurement <<sealed>> {
+  +MeasurementId : Guid
+  +DeviceId : Guid
+  +Source : string
+  +MeasuredAt : DateTime
+  +Ppm : int
+  +Segment : string
+  +ReceivedAt : DateTime
+}
+
+note right of Measurement
+  Alle Eigenschaften: public get; init;
+  Source und Segment: required
+  MeasurementId: Primärschlüssel
+  Source: simulator oder sensor
+  Ppm: 1 bis 100000
+  Segment: nicht leer, maximal 80 Zeichen
+end note
+
+note bottom of Measurement
+  Keine Navigationseigenschaften oder
+  Domänenbeziehungen implementiert.
+  DeviceId ist ein skalarer Guid-Wert,
+  kein modellierter Fremdschlüssel zu Device.
+end note
+@enduml

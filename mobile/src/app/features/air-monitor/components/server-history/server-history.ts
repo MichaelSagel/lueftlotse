@@ -12,8 +12,10 @@ function localInput(time: number): string {
     <button type="button" (click)="expanded.set(!expanded())" [attr.aria-expanded]="expanded()" aria-controls="server-history">Serververlauf</button>
     <section id="server-history" [hidden]="!expanded()" aria-label="Serververlauf">
       <p>Messungen aus PostgreSQL. Dieser Verlauf ist unabhängig vom lokalen Verlauf.</p>
+      <div class="period-filter">
       <label>Von (lokale Zeit) <input type="datetime-local" [value]="from()" (input)="from.set($any($event.target).value); changed()"></label>
       <label>Bis (ausschließlich, lokale Zeit) <input type="datetime-local" [value]="to()" (input)="to.set($any($event.target).value); changed()"></label>
+      </div>
       <button type="button" (click)="history.load()" [disabled]="history.loading()">Laden</button>
       @if (history.loading()) { <p role="status">Serververlauf wird geladen …</p> }
       @if (history.error(); as error) { <p role="alert">{{ error }}</p> }
@@ -28,7 +30,23 @@ function localInput(time: number): string {
       @if (history.nextCursor()) { <button type="button" (click)="history.load(true)" [disabled]="history.loading()">Weitere laden</button> }
     </section>
   `,
-  styles: `:host { display:block; min-width:0; margin-bottom:24px; } button,input { font:inherit; padding:10px; margin:4px 0; max-width:100%; box-sizing:border-box; } label { display:block; } section { padding:12px; border:1px solid #b7cbc1; border-radius:14px; } .table-scroll { width:100%; min-width:0; } table { width:100%; table-layout:fixed; border-collapse:collapse; } th,td { padding:6px 4px; text-align:left; overflow-wrap:anywhere; } th:first-child { width:46%; }`,
+  styles: `
+    :host { display:block; min-width:0; margin-bottom:24px; }
+    button,input { font:inherit; padding:10px; margin:4px 0; max-width:100%; min-height:48px; box-sizing:border-box; }
+    button { width:100%; border:1px solid #163e2c; border-radius:14px; background:white; color:#163e2c; font-weight:600; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:default; }
+    button:focus-visible,input:focus-visible { outline:3px solid #17663e; outline-offset:3px; }
+    label { display:grid; min-width:0; font-size:14px; }
+    input { width:100%; min-width:0; border:1px solid #b7cbc1; border-radius:8px; background:white; color:#193629; }
+    section { padding:16px; border:1px solid #b7cbc1; border-radius:14px; background:white; overflow-wrap:anywhere; }
+    .period-filter { display:grid; gap:12px; }
+    .table-scroll { width:100%; min-width:0; overflow-x:auto; }
+    table { width:100%; table-layout:fixed; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+    caption { text-align:left; padding:12px 0; color:#52675e; }
+    th,td { padding:10px 6px; text-align:left; overflow-wrap:anywhere; border-bottom:1px solid #e4f3e9; }
+    th:first-child { width:46%; }
+    @media (min-width:600px) { .period-filter { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  `,
 })
 export class ServerHistoryBlock {
   protected readonly history = inject(ServerHistory);

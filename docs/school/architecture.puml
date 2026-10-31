@@ -1,0 +1,45 @@
+@startuml
+title Architekturübersicht Lüftlotse
+left to right direction
+skinparam componentStyle rectangle
+
+package "Browser / lokaler Client" {
+  component "Angular-Anwendung\nTypeScript" as Angular
+  component "Web Bluetooth\nBrowser-API" as Bluetooth
+  database "IndexedDB\nlokale Historie und Sync-Status" as LocalDB
+}
+
+package "Backend" {
+  component "HTTP API\nASP.NET Core / C#" as API
+  component "EF Core\nNpgsql-Provider" as EF
+}
+
+database "PostgreSQL\nTabelle measurements" as PostgreSQL
+node "ESP32\nCO₂-Sensor" as ESP32
+
+Angular --> API : HTTP / JSON\nGET /api/measurements\nPOST /api/measurements/batch
+API --> EF : Datenzugriff
+EF --> PostgreSQL : SQL
+Angular --> LocalDB : lokale Historie lesen / verwalten\nSync-Status aktualisieren
+Angular --> Bluetooth : Gerät auswählen / GATT verbinden
+Bluetooth --> ESP32 : BLE / GATT
+ESP32 ..> Angular : LIVE_SAMPLE über Web Bluetooth\naktueller CO₂-Wert
+
+note bottom of Angular
+  Serververlauf: GET-Antworten nur im Arbeitsspeicher,
+  keine Übernahme in die lokale IndexedDB-Historie.
+  Manuelle Synchronisierung: gespeicherte lokale
+  Messungen über POST an die API senden.
+end note
+
+note bottom of Bluetooth
+  LIVE_SAMPLE dient ausschließlich der aktuellen Anzeige.
+  Dieser Pfad schreibt weder in IndexedDB noch über
+  die HTTP API nach PostgreSQL.
+end note
+
+note bottom of LocalDB
+  Lokaler Browserspeicher, getrennt von PostgreSQL.
+  Keine direkte Verbindung zwischen den Datenbanken.
+end note
+@enduml

@@ -1,4 +1,4 @@
-:host { display: block; margin-bottom: 28px; }
+:host { display: block; min-width: 0; margin-bottom: 28px; }
 section { background: white; border: 1px solid #b7cbc1; border-radius: 20px; padding: 20px 12px; }
 h2 { margin: 0 8px 8px; font-size: 18px; }
 .caption, .empty { margin: 8px; color: #52675e; font-size: 12px; line-height: 1.6; }
@@ -22,7 +22,7 @@ label { display: grid; gap: 6px; font-size: 13px; }
 input { width: 100%; min-width: 0; min-height: 44px; font: inherit; padding: 6px; border: 1px solid #b7cbc1; border-radius: 6px; }
 .interval { font-variant-numeric: tabular-nums; }
 h3 { margin: 18px 8px 8px; font-size: 16px; }
-.table-scroll { overflow-x: auto; margin: 8px; }
+.table-scroll { overflow-x: auto; max-width: 100%; margin: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 caption { text-align: left; padding: 8px 0; color: #52675e; }
 th, td { padding: 8px 4px; border-bottom: 1px solid #e4f3e9; text-align: left; white-space: nowrap; }
