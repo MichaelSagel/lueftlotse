@@ -1,0 +1,66 @@
+{
+  "deviceId": "d7c01000-2026-4a00-8a00-000000000001",
+  "source": "simulator",
+  "measurements": [
+    {
+      "measurementId": "d7c01000-2026-4a01-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:00:00.000Z",
+      "ppm": 740,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a02-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:01:00.000Z",
+      "ppm": 810,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a03-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:02:00.000Z",
+      "ppm": 925,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a04-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:03:00.000Z",
+      "ppm": 1004,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a05-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:04:00.000Z",
+      "ppm": 1120,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a06-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:05:00.000Z",
+      "ppm": 1305,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a07-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:06:00.000Z",
+      "ppm": 1750,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a08-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:07:00.000Z",
+      "ppm": 2050,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a09-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:08:00.000Z",
+      "ppm": 1880,
+      "segment": "school-demo-2026-01-15"
+    },
+    {
+      "measurementId": "d7c01000-2026-4a10-8a00-000000000001",
+      "measuredAt": "2026-01-15T10:09:00.000Z",
+      "ppm": 890,
+      "segment": "school-demo-2026-01-15"
+    }
+  ]
+}
