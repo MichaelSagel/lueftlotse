@@ -15,6 +15,7 @@ sind getrennte Datenwege.
 - [Domänenmodell](domain-model.md) und [UML-Diagramm](domain-model.puml)
 - [Architektur](architecture.md) und [Architekturdiagramm](architecture.puml)
 - [GUI-Vergleich mit Wireframe und Screenshot](gui-comparison.md)
+- [Präsentationsnotizen](presentation-notes.md)
 
 ## Voraussetzungen und lokale Konfiguration
 
