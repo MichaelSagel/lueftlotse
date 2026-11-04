@@ -1,168 +1,92 @@
-# Первый запуск: ESP32-C3 Super Mini
+# First run: ESP32-C3 Super Mini
 
-Нужны установленный через EIM ESP-IDF **6.1**, USB-C кабель с передачей данных
-и Android-приложение Lüftlotse. Ниже — инструкция для Windows; команды
-выполняются из **корня репозитория lueftlotse**, а не из mobile или firmware.
+You need ESP-IDF **6.1** installed through EIM, a USB-C data cable and the Lüftlotse Android application. These instructions are for Windows; run the commands from the **root of the lueftlotse repository**, not from mobile or firmware.
 
-## 1. Окружение и сборка
+## 1. Environment and build
 
-В EIM откройте **Manage Installations → Open Dashboard**, для установленной
-версии **v6.1** нажмите **Open IDF Terminal**. Можно использовать созданный EIM
-ярлык PowerShell этой версии. Он активирует отдельное Python-окружение и
-инструменты ESP-IDF для терминала; системный PATH менять не нужно.
+In EIM, open **Manage Installations → Open Dashboard**, then select **Open IDF Terminal** for the installed **v6.1** version. Alternatively, use the PowerShell shortcut created by EIM for that version. It activates a separate Python environment and the ESP-IDF tools for that terminal; there is no need to change the system PATH.
 
-В активированном терминале перейдите в корень репозитория и выполните:
+In the activated terminal, go to the repository root and run:
 
-~~~powershell
+```powershell
 idf.py --version
 idf.py -C firmware -D SDKCONFIG=build/sdkconfig build
-~~~
+```
 
-Версия должна быть v6.1. Target esp32c3 и NimBLE заданы в sdkconfig.defaults.
-Генерируемая конфигурация находится в firmware/build/sdkconfig; старый
-firmware/sdkconfig этой командой не используется. Образ приложения:
-firmware/build/lueftlotse_firmware.bin. Build и локальные конфигурации исключены
-из Git. Обычная сборка не проверяет работу радио.
+The version must be v6.1. The esp32c3 target and NimBLE are configured in sdkconfig.defaults. The generated configuration is stored in firmware/build/sdkconfig; this command does not use the older firmware/sdkconfig. The application image is firmware/build/lueftlotse_firmware.bin. Build output and local configuration files are excluded from Git. A normal build does not verify radio operation.
 
-## 2. COM-порт, прошивка и monitor
+## 2. COM port, flashing and monitor
 
-Подключите плату к USB. В **Диспетчере устройств → Порты (COM и LPT)**
-найдите порт, исчезающий при отключении платы и появляющийся при подключении.
-При native USB он может называться USB Serial Device. Не выбирайте порт телефона.
-Ниже **COM7 — пример**: замените его своим портом; закройте другие serial-терминалы.
+Connect the board over USB. In **Device Manager → Ports (COM & LPT)**, find the port that disappears when you unplug the board and reappears when you reconnect it. With native USB, it may be called USB Serial Device. Do not select the phone's port. **COM7 below is an example**: replace it with your own port and close other serial terminals.
 
-~~~powershell
+```powershell
 idf.py -C firmware -D SDKCONFIG=build/sdkconfig -p COM7 flash
 idf.py -C firmware -D SDKCONFIG=build/sdkconfig -p COM7 monitor
-~~~
+```
 
-Ожидается строка `Lueftlotse firmware started`. Если стартовый лог пропущен,
-кратко нажмите RESET. Выход из monitor — **Ctrl+]**; перед новой прошивкой
-освободите COM-порт. Текущая конфигурация выводит логи также через вторичную
-USB Serial/JTAG консоль; основной UART использует 115200 baud.
+Expect the line `Lueftlotse firmware started`. If you missed the startup log, briefly press RESET. Exit monitor with **Ctrl+]**; release the COM port before flashing again. The current configuration also outputs logs through the secondary USB Serial/JTAG console; the primary UART uses 115200 baud.
 
-Если автоматический вход в режим прошивки не сработал (в том числе при первом
-подключении через native USB):
+If automatic entry into flashing mode fails, including on the first connection through native USB:
 
-1. Зажмите **BOOT**.
-2. Кратко нажмите и отпустите **RESET/RST**, продолжая держать BOOT.
-3. Отпустите BOOT, заново проверьте COM-порт и повторите команду flash.
-4. После успешной прошивки, если приложение не запустилось, нажмите RESET
-   с отпущенной BOOT, затем откройте monitor.
+1. Hold **BOOT**.
+2. Briefly press and release **RESET/RST**, while continuing to hold BOOT.
+3. Release BOOT, check the COM port again and repeat the flash command.
+4. After a successful flash, if the application has not started, press RESET with BOOT released, then open monitor.
 
-**Не используйте erase-flash как обычный шаг.** Полное стирание удаляет NVS,
-включая постоянный deviceId. Обычная flash при неизменной таблице разделов
-сохраняет NVS; прошивка не стирает её автоматически при ошибках.
+**Do not use erase-flash as a routine step.** A full erase removes NVS, including the persistent deviceId. Normal flashing preserves NVS when the partition table remains unchanged; the firmware does not automatically erase it on errors.
 
-## 3. Проверка в Android
+## 3. Android verification
 
-Включите Bluetooth, откройте **Gerät verbinden**, запустите поиск, выберите
-**Lueftlotse → Verbinden**. Полное имя передаётся в scan response, UUID сервиса —
-в advertising. Приложение читает Info, проверяет v1.0/v1.1, подписывается на Events,
-отправляет GET_STATUS и ждёт STATUS с соответствующим requestId.
+Enable Bluetooth, open **Gerät verbinden**, start discovery and select **Lueftlotse → Verbinden**. The full name is included in the scan response; the service UUID is included in advertising. The application reads Info, validates v1.0/v1.1, subscribes to Events, sends GET_STATUS and waits for STATUS with the matching requestId.
 
-Ожидаются **STATUS bestätigt** и deviceId. Info v1.1, capabilities = 0x0010;
-STATUS сообщает пустой журнал, timeValid=0 и storageState=0.
-Firmware передаёт текущий CO₂ через LIVE_SAMPLE после handshake. Главный экран
-пока остаётся в режиме **Simulator**: mobile не отображает и не сохраняет preview.
-Проверка SCD41 доступна через monitor и BLE GATT-инспектор (см. ниже).
-Журнал, LIVE_READY, FETCH и **TIME_SET ещё не реализованы**;
-догрузку измерений проверять пока нельзя.
+Expect **STATUS bestätigt** and deviceId. Info is v1.1, capabilities = 0x0010; STATUS reports an empty journal, timeValid=0 and storageState=0. Firmware transmits the current CO₂ through LIVE_SAMPLE after the handshake. The main UI uses **Sensor** readings; Simulator is no longer the primary UI. The browser client displays received LIVE_SAMPLE values and also saves and uploads them as described below. This browser storage change does not affect Android. SCD41 verification is available through monitor and a BLE GATT inspector (see below). The journal, LIVE_READY, FETCH and **TIME_SET are not yet implemented**; measurement download cannot be tested yet.
 
-### Проверка SCD41 через monitor
+### Browser client behavior
 
-Подключение: **SDA → GPIO0**, **SCL → GPIO1**, общий GND. Шина I²C работает
-на **100 кГц**, 7-битный адрес датчика — **0x62**. Нужны внешние подтяжки SDA/SCL
-к **3,3 В** (возможно, уже установлены на модуле); внутренние подтяжки включены
-как вспомогательные. Питание датчика должно выдерживать его пиковый ток;
-на GPIO ESP32 нельзя подавать подтяжки к 5 В.
+In Chrome with Web Bluetooth support, connect through **Sensor ausw?hlen** and wait for a new valid LIVE_SAMPLE. The browser displays the value, saves it locally in IndexedDB with source=sensor and pending status, then automatically sends it through the C# POST /api/measurements/batch API to PostgreSQL. DeviceId comes from Info; the browser assigns MeasurementId once and deduplicates by deviceId/bootId/sampleCounter, including after reconnect. API failures leave records pending; retries preserve the original IDs and data.
 
-После запуска BLE firmware ожидает готовности датчика, останавливает прежний
-периодический режим (на случай сброса только ESP32), читает 48-битный серийный
-номер и запускает периодические измерения с интервалом 5 секунд. В monitor
-появляются строки тега `scd41`: `Serial number: ...`, затем
-`CO2=... ppm, temperature=... C, humidity=... %RH [accuracy unverified]`.
-Готовность опрашивается раз в секунду; CRC-8 проверяется у каждого слова
-серийного номера, статуса готовности и измерений. Ответы с ошибкой CRC/I²C
-и CO₂=0 отбрасываются с сообщением в лог. При ошибке инициализации проверка
-датчика прекращается до перезапуска, BLE продолжает работать; при ошибке
-чтения очередного измерения опрос продолжается.
+MeasuredAt is the browser's wall-clock time when the valid notification is received, not sensor UTC or uptime. This is separate client behavior: the LIVE_SAMPLE wire format and its best-effort, non-journal contract are unchanged. Samples missed while disconnected are not recovered. Android persistence is not changed by this browser implementation.
 
-**На мембрану этого датчика ранее попал изопропанол. Получение данных и
-корректный CRC подтверждают связь, но не точность измерений.** Firmware
-выводит это предупреждение при запуске. Проверка не выполняет принудительную
-калибровку, сброс к заводским настройкам или запись настроек в EEPROM;
-настройка автоматической самокалибровки датчика остаётся прежней.
-В BLE передаётся только CO₂ как предварительный просмотр LIVE_SAMPLE.
-Температура и влажность остаются в monitor. Измерения не записываются в журнал.
+### Checking SCD41 through monitor
 
-Команды, задержки, преобразования и CRC реализованы по
-[даташиту Sensirion SCD4x](https://sensirion.com/media/documents/48C4B7FB/67FE0194/CD_DS_SCD4x_Datasheet_D1.pdf).
+Connections: **SDA → GPIO0**, **SCL → GPIO1**, and common GND. The I²C bus operates at **100 kHz**; the sensor's 7-bit address is **0x62**. External SDA/SCL pull-ups to **3.3 V** are required (they may already be fitted on the module); internal pull-ups are enabled as supplementary pull-ups. The sensor's power supply must support its peak current; do not apply 5 V pull-ups to ESP32 GPIOs.
 
-### Проверка LIVE_SAMPLE через BLE
+After starting BLE, the firmware waits for the sensor to become ready, stops any previous periodic mode (in case only the ESP32 was reset), reads the 48-bit serial number and starts periodic measurements at 5-second intervals. Monitor displays lines with the `scd41` tag: `Serial number: ...`, followed by `CO2=... ppm, temperature=... C, humidity=... %RH [accuracy unverified]`. Readiness is polled once per second; CRC-8 is checked for each word of the serial number, readiness status and measurements. Responses with CRC/I²C errors and CO₂=0 are discarded with a log message. If initialization fails, sensor checking stops until a restart, while BLE continues to operate; if reading a subsequent measurement fails, polling continues.
 
-Отключите Android-приложение от платы и подключите один BLE GATT-инспектор.
-UUID и формат пакетов приведены в [спецификации](../docs/ble-protocol-v1.md).
+**Isopropanol previously contacted this sensor's membrane. Receiving data with a valid CRC confirms communication, not measurement accuracy.** The firmware prints this warning at startup. The check does not perform forced calibration, a factory reset or an EEPROM settings write; the sensor's automatic self-calibration setting remains unchanged. Only CO₂ is transmitted over BLE as a LIVE_SAMPLE preview. Temperature and humidity remain in monitor. Measurements are not written to the journal.
 
-1. Прочитайте Info: ровно 20 байт, первые два байта `01 01`, последние два
-   `10 00`. Подпишитесь на Events. До GET_STATUS измерения не должны приходить.
-2. Отправьте GET_STATUS `010134120001f150a9d0` через write with response.
-   Сначала должны прийти четыре фрагмента STATUS (type=0x80), requestId=0x1234.
-   Удалите 6-байтные заголовки, соберите body+CRC и проверьте CRC32 по спецификации.
-3. Дождитесь нового измерения после STATUS (обычно около 5 секунд). LIVE_SAMPLE
-   имеет type=0x8A, три фрагмента 20/20/18 байт с одним Events messageId.
-   После сборки и проверки CRC body имеет 36 байт: bootId в байтах 0..15,
-   sampleCounter:u64 в 16..23, uptimeMs:u64 в 24..31, ppm:u32 в 32..35.
-   bootId должен совпасть со STATUS, ppm — с новым показанием monitor.
-4. Проверьте минимум три измерения: sampleCounter и uptimeMs растут, каждое
-   передаётся один раз. Получение корректных данных не подтверждает точность
-   датчика после попадания изопропанола.
-5. Отключитесь, дождитесь нескольких измерений в monitor, подключитесь снова и
-   повторите handshake. bootId прежний; sampleCounter продолжает расти, старые
-   образцы не воспроизводятся. Повторите отписку/подписку: до нового GET_STATUS
-   preview закрыт; в том же соединении нужны новый Control messageId и CRC.
-   При отписке посреди сообщения firmware закрывает соединение.
-6. При повторных GET_STATUS ответы получают приоритет между целыми сообщениями.
-   Фрагменты STATUS и LIVE_SAMPLE не должны перемешиваться. При диагностике
-   ошибки I²C/CRC старый ppm повторно не приходит; после восстановления приходит
-   только новый корректный образец. Ошибка посреди отправки закрывает соединение.
+Commands, delays, conversions and CRC are implemented according to the [Sensirion SCD4x datasheet](https://sensirion.com/media/documents/48C4B7FB/67FE0194/CD_DS_SCD4x_Datasheet_D1.pdf).
 
-Firmware использует один потокобезопасный буфер последнего образца и очередь
-до четырёх ожидающих ответов Control. Пропуски sampleCounter допустимы: это
-счётчик корректных чтений в RAM, не sequence журнала. После Events messageId=65535
-соединение закрывается без wraparound. Успешная локальная отправка STATUS через
-NimBLE открывает preview, но Notify не даёт подтверждения от приложения.
+### Checking LIVE_SAMPLE over BLE
 
-Автоматические проверки кодека и планировщика описаны в
-[ble_server/README.md](components/ble_server/README.md). Проверки выше требуют
-платы с этой firmware; сборка и QEMU не заменяют проверку радио и SCD41.
+Disconnect the Android application from the board and connect one BLE GATT inspector. UUIDs and packet formats are listed in the [specification](../docs/ble-protocol-v1.md).
 
-## 4. Идентичность после перезапуска
+1. Read Info: exactly 20 bytes, the first two bytes `01 01`, and the last two `10 00`. Subscribe to Events. No measurements should arrive before GET_STATUS.
+2. Send GET_STATUS `010134120001f150a9d0` using write with response. Four STATUS fragments (type=0x80) with requestId=0x1234 must arrive first. Remove the 6-byte headers, assemble body+CRC and validate CRC32 according to the specification.
+3. Wait for a new measurement after STATUS (usually about 5 seconds). LIVE_SAMPLE has type=0x8A and three fragments of 20/20/18 bytes sharing one Events messageId. After assembly and CRC validation, the body is 36 bytes: bootId at bytes 0..15, sampleCounter:u64 at 16..23, uptimeMs:u64 at 24..31, and ppm:u32 at 32..35. bootId must match STATUS, and ppm must match the new reading in monitor.
+4. Check at least three measurements: sampleCounter and uptimeMs increase, and each measurement is transmitted once. Receiving valid data does not confirm sensor accuracy after exposure to isopropanol.
+5. Disconnect, wait for several measurements in monitor, reconnect and repeat the handshake. bootId is unchanged; sampleCounter continues increasing, and old samples are not replayed. Repeat unsubscribe/subscribe: preview remains closed until a new GET_STATUS; within the same connection, a new Control messageId and CRC are required. Unsubscribing in the middle of a message causes firmware to close the connection.
+6. For repeated GET_STATUS requests, responses take priority between complete messages. STATUS and LIVE_SAMPLE fragments must not be interleaved. When diagnosing an I²C/CRC error, the old ppm value is not resent; after recovery, only a new valid sample arrives. An error during transmission closes the connection.
 
-Запишите deviceId из Android UI. Перезапустите плату кнопкой RESET или
-отключением питания, снова найдите её и подключитесь: **deviceId должен
-остаться тем же**, а **bootId в новом STATUS должен измениться**.
+Firmware uses one thread-safe buffer for the latest sample and a queue of up to four pending Control responses. sampleCounter gaps are allowed: it counts valid reads in RAM and is not the journal sequence. After Events messageId=65535, the connection closes without wraparound. Successful local transmission of STATUS through NimBLE opens preview, but Notify does not provide an acknowledgement from the application.
 
-bootId пока не показан в Android UI. Для его отдельной проверки отключите
-Lüftlotse от платы (допускается один central) и используйте BLE GATT-инспектор:
+Automated codec and scheduler checks are described in [ble_server/README.md](components/ble_server/README.md). The checks above require a board running this firmware; a build and QEMU do not replace verification of the radio and SCD41.
 
-- UUID Info, Control и Events приведены в [спецификации](../docs/ble-protocol-v1.md).
-- Подпишитесь на Events и отправьте в Control через **write with response**
-  фиксированный GET_STATUS: `010134120001f150a9d0`.
-- Сохраните четыре фрагмента STATUS по порядку. Для сборки удалите 6 байт
-  заголовка каждого фрагмента, соедините payload и проверьте/удалите последние
-  4 байта CRC согласно спецификации. В 52-байтном body bootId занимает байты
-  **2..17** (смещения от нуля), после двухбайтного requestId.
-- Повторите после перезапуска и нового подключения. Тот же GET_STATUS допустим
-  на новом соединении; на одном соединении каждый запрос требует нового
-  messageId и пересчитанного CRC. UUID bootId сравнивайте в каноническом порядке.
+## 4. Identity after restart
 
-Сохранение NVS, BLE-обмен, повторное подключение и ограничения числа соединений
-требуют проверки на настоящей плате; успешная сборка и QEMU-тесты кодека их
-не подтверждают. Pairing и контроль доступа пока не реализованы.
+Record deviceId from the Android UI. Restart the board using RESET or by disconnecting power, then discover and connect to it again: **deviceId must remain unchanged**, while **bootId in the new STATUS must change**.
 
-## Официальные инструкции ESP-IDF 6.1
+bootId is not yet displayed in the Android UI. To check it separately, disconnect Lüftlotse from the board (only one central is allowed) and use a BLE GATT inspector:
 
-- [Windows: активация EIM, build, flash, monitor](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/get-started/windows-start-project.html)
-- [COM-порт и ручной BOOT/RESET](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/get-started/establish-serial-connection.html)
+- The Info, Control and Events UUIDs are listed in the [specification](../docs/ble-protocol-v1.md).
+- Subscribe to Events and send the fixed GET_STATUS `010134120001f150a9d0` to Control using **write with response**.
+- Save the four STATUS fragments in order. To assemble them, remove the 6-byte header from each fragment, concatenate the payloads, and validate/remove the final 4 CRC bytes according to the specification. In the 52-byte body, bootId occupies bytes **2..17** (zero-based offsets), after the two-byte requestId.
+- Repeat after restarting and establishing a new connection. The same GET_STATUS is valid on a new connection; within one connection, every request requires a new messageId and a recomputed CRC. Compare bootId UUIDs in canonical order.
+
+NVS persistence, BLE exchange, reconnection and connection-count limits require verification on a real board; a successful build and QEMU codec tests do not confirm them. Pairing and access control are not yet implemented.
+
+## Official ESP-IDF 6.1 instructions
+
+- [Windows: EIM activation, build, flash, monitor](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/get-started/windows-start-project.html)
+- [COM port and manual BOOT/RESET](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/get-started/establish-serial-connection.html)
 - [USB Serial/JTAG console](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-guides/usb-serial-jtag-console.html)

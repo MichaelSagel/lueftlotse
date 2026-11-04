@@ -1,199 +1,105 @@
 # Lüftlotse BLE protocol v1
 
-Статус: спецификация первого прототипа, реализована частично. ESP32-C3 + SCD41 —
-peripheral, Android/iOS-приложение — central. Нормативные слова «должен» и
-«нельзя» задают требования совместимости. Безопасность и ёмкость журнала пока
-не определены; это не спецификация готового публичного устройства.
+Status: specification for the first prototype, partially implemented. The ESP32-C3 + SCD41 is the peripheral; the Android/iOS application is the central. The normative terms “must” and “must not” define compatibility requirements. Security and journal capacity have not yet been defined; this is not a specification for a finished public device.
 
-v1.1 добавляет предварительный просмотр LIVE_SAMPLE. Текущая реализация firmware
-объявляет Info v1.1, capabilities=0x0010 и передаёт новые показания SCD41 после
-подписки и STATUS handshake. Журнал, LIVE_READY, TIME_SET и FETCH ещё не реализованы;
-mobile пока не использует preview как источник измерений.
+v1.1 adds the LIVE_SAMPLE preview. The current firmware implementation advertises Info v1.1 with capabilities=0x0010 and transmits new SCD41 readings after subscription and the STATUS handshake. The journal, LIVE_READY, TIME_SET and FETCH are not yet implemented in firmware. The current UI uses Sensor readings rather than Simulator as its main view. The browser displays received LIVE_SAMPLE values, saves them locally and automatically sends them to the HTTP batch API. This browser-only client behavior is described in section 11; it does not change the normative LIVE_SAMPLE contract in section 5.1 or Android persistence.
 
-## 1. Идентичность и постоянный журнал
+## 1. Identity and persistent journal
 
-- `deviceId`: случайный UUID v4, один раз сохранённый в NVS. Не BLE-адрес,
-  не имя и не серийный номер SCD41. Обычная перезагрузка/обновление его сохраняет.
-  Полный заводской сброс создаёт новый deviceId и новый журнал.
-- `measurementId`: случайный UUID v4 на ESP32, сохраняется один раз вместе с
-  записью. Повторное чтение, смена телефона и перезагрузка его не изменяют.
-- `bootId`: UUID v4 каждой загрузки; сохраняется в каждой записи.
-- `segmentId`: UUID v4 непрерывного сеанса измерений. Меняется при загрузке,
-  остановке/возобновлении измерений, сбое датчика, утрате измерений или
-  скачкообразной коррекции времени. BLE disconnect сам по себе сегмент не меняет.
-- `sequence`: uint64, начинается с 1, строго возрастает в рамках deviceId.
-  Номера присваиваются только сохраняемым измерениям. Они не переиспользуются
-  после перезапуска или вытеснения. Переполнение счётчика — ошибка, не wraparound.
+- `deviceId`: a random UUID v4 stored once in NVS. It is not a BLE address, a name or the SCD41 serial number. A normal reboot/update preserves it. A full factory reset creates a new deviceId and a new journal.
+- `measurementId`: a random UUID v4 generated on the ESP32 and stored once together with the record. Reading the record again, changing phones and rebooting do not change it.
+- `bootId`: a UUID v4 for each boot; stored in every record.
+- `segmentId`: a UUID v4 identifying an uninterrupted measurement session. It changes on boot, when measurements stop/resume, on sensor failure, measurement loss or a step change in the clock. A BLE disconnect alone does not change the segment.
+- `sequence`: uint64, starting at 1 and strictly increasing within a deviceId. Numbers are assigned only to measurements that are stored. They are not reused after a restart or eviction. Counter exhaustion is an error, not wraparound.
 
-Журнал — постоянное кольцо фиксированной, пока не выбранной ёмкости. Запись,
-её ID и продвижение состояния журнала должны быть crash-consistent. Сначала
-commit flash, затем notification. Реализация обязана обеспечить восстановление
-high-watermark sequence при сбое питания; простой RAM-счётчик неприемлем.
-Неиспользованные заранее зарезервированные номера нельзя выдавать за потерянные
-измерения: в v1 такой способ резервирования не применяется.
+The journal is a persistent ring buffer of fixed capacity, which has not yet been chosen. The record, its ID and advancement of journal state must be crash-consistent. Commit to flash first, then send the notification. The implementation must recover the sequence high-watermark after a power failure; a simple RAM counter is unacceptable. Unused numbers reserved in advance must not be represented as lost measurements: v1 does not use this reservation method.
 
-Новые измерения вытесняют старейшие и продолжают сохраняться без телефона и
-без ACK. Подтверждения не меняют порядок вытеснения. Неисправность flash,
-при которой commit невозможен, возвращает STORAGE_ERROR: несохранённые данные
-нельзя выдавать за сохранённые. Плохой результат чтения SCD41 не заменяется
-предыдущим ppm и не создаёт фиктивную запись.
+New measurements evict the oldest records and continue to be stored without a phone and without ACK. Acknowledgements do not change eviction order. A flash failure that prevents a commit returns STORAGE_ERROR: unstored data must not be presented as stored. An invalid SCD41 reading is not replaced with the previous ppm value and does not create a fictitious record.
 
-## 2. Время и состояния записи
+## 2. Time and record states
 
-| Код | Состояние | Значение |
+| Code | State | Meaning |
 | --- | --- | --- |
-| 0 | UNDATED | Текущая загрузка, UTC ещё может быть восстановлен |
-| 1 | READY | Окончательный UTC, запись готова к импорту |
-| 2 | UNDATABLE | Окончательно недатируемая запись предыдущей загрузки |
+| 0 | UNDATED | Current boot; UTC may still be recovered |
+| 1 | READY | Final UTC; the record is ready for import |
+| 2 | UNDATABLE | Permanently undatable record from a previous boot |
 
-Монотонное `uptimeMs` — uint64 миллисекунд с начала bootId. UTC — int64
-миллисекунд Unix epoch; часовой пояс по BLE не передаётся.
+Monotonic `uptimeMs` is uint64 milliseconds since the start of bootId. UTC is int64 milliseconds since the Unix epoch; no time zone is transmitted over BLE.
 
-Телефон передаёт TIME_SET с текущим UTC. В момент принятия полного сообщения
-ESP32 фиксирует пару `(utcMs, uptimeMs)` и её неопределённость. Для первого
-прототипа это оценка часов телефона, не гарантированно точное мировое время.
-Телефон учитывает время передачи; точность и допустимый порог остаются открытыми.
+The phone sends TIME_SET with the current UTC. When the complete message is accepted, the ESP32 captures the `(utcMs, uptimeMs)` pair and its uncertainty. For the first prototype, this is an estimate based on the phone clock, not guaranteed accurate world time. The phone accounts for transmission time; accuracy and the acceptable threshold remain open questions.
 
-При первой привязке времени UNDATED той же загрузки получают
-`utcMs = anchorUtcMs + record.uptimeMs - anchorUptimeMs`. Каждая запись
-атомарно переводится в READY в постоянном журнале ДО первой выдачи в READY.
-Новые измерения при известных часах сразу коммитятся как READY.
+On the first time anchoring, UNDATED records from the same boot receive `utcMs = anchorUtcMs + record.uptimeMs - anchorUptimeMs`. Each record is atomically transitioned to READY in the persistent journal BEFORE it is first returned as READY. When the clock is known, new measurements are committed directly as READY.
 
-**Момент окончательной фиксации — durable-переход в READY на ESP32.** После
-него все канонические поля под measurementId неизменны, в том числе UTC и
-segmentId, даже до импорта телефоном. Новая коррекция часов влияет только на
-будущие записи и начинает новый segmentId. Повтор TIME_SET в той же загрузке
-сначала завершает обработку UNDATED первой принятой привязкой; переякоривание
-уже готовых записей запрещено.
+**The point of finalization is the durable transition to READY on the ESP32.** After that, all canonical fields under a measurementId are immutable, including UTC and segmentId, even before import by the phone. A new clock correction affects only future records and starts a new segmentId. A repeated TIME_SET during the same boot must first finish processing UNDATED records using the first accepted anchor; re-anchoring records that are already READY is prohibited.
 
-При новой загрузке все сохранившиеся UNDATED с другим bootId считаются
-UNDATABLE. Это можно вычислять по bootId без массовой перезаписи flash.
-Их ID, ppm, segmentId и uptime сохраняются; UTC им никогда не придумывается.
-UNDATABLE — терминальное состояние, позднее время телефона его не исправляет.
-Во время восстановления журнала FETCH не обслуживается (BUSY).
+On a new boot, all surviving UNDATED records with another bootId are treated as UNDATABLE. This can be derived from bootId without rewriting all records in flash. Their IDs, ppm, segmentId and uptime are preserved; UTC is never fabricated for them. UNDATABLE is a terminal state; later time from the phone cannot correct it. FETCH is not served during journal recovery (BUSY).
 
-UNDATED не импортируются как обычные измерения. UNDATABLE сохраняются телефоном
-в отдельном журнале недатируемых записей; в текущий batch API и календарный
-график не попадают. Их количество/наличие должно быть видно пользователю.
-Для v1 нет экспорта отдельных UNDATED: они обозначаются через TIME_PENDING.
+UNDATED records are not imported as ordinary measurements. The phone stores UNDATABLE records in a separate journal of undatable records; they are not sent to the current batch API or included in the calendar-based chart. Their count/presence must be visible to the user. v1 does not export individual UNDATED records: they are indicated by TIME_PENDING.
 
-## 3. GATT и версия
+## 3. GATT and version
 
-Собственные UUID, точные значения:
+Custom UUIDs, exact values:
 
-| Объект | UUID | Свойства |
+| Object | UUID | Properties |
 | --- | --- | --- |
 | Lüftlotse service | 9c6b1000-7a3e-4d9f-8b52-6e210f42a001 | service |
 | Info | 9c6b1001-7a3e-4d9f-8b52-6e210f42a001 | Read |
 | Control | 9c6b1002-7a3e-4d9f-8b52-6e210f42a001 | Write with response |
 | Events | 9c6b1003-7a3e-4d9f-8b52-6e210f42a001 | Notify, CCCD |
 
-Info — ровно 20 байт без фрагментации: `major:u8=1, minor:u8,
-deviceId:uuid16, capabilities:u16`. capabilities — битовая маска:
+Info is exactly 20 bytes without fragmentation: `major:u8=1, minor:u8, deviceId:uuid16, capabilities:u16`. capabilities is a bitmask:
 
-| Версия | minor | Известная маска | Возможности |
+| Version | minor | Known mask | Capabilities |
 | --- | --- | --- | --- |
-| v1.0 | 0 | 0x000F | Бит 0 LIVE_READY, 1 journal, 2 time synchronization, 3 non-destructive batch ACK |
-| v1.1 | 1 | 0x001F | Те же биты 0..3; бит 4 (`0x0010`) LIVE_SAMPLE preview |
+| v1.0 | 0 | 0x000F | Bit 0 LIVE_READY, 1 journal, 2 time synchronization, 3 non-destructive batch ACK |
+| v1.1 | 1 | 0x001F | The same bits 0..3; bit 4 (`0x0010`) LIVE_SAMPLE preview |
 
-Принимается любое подмножество маски своей версии, включая 0x0000.
-Бит 0 не означает LIVE_SAMPLE; бит 4 не означает LIVE_READY или журнал.
-v1.0 с битом 0x0010 недопустим. Неизвестные биты запрещены, иначе INVALID_MESSAGE.
-Требования конкретной операции к возможностям проверяет уровень выше кодека.
-Для LIVE_SAMPLE обязательны одновременно Info v1.1 и capability 0x0010.
-Неизвестная major или minor (включая 1.2) запрещает команды и импорт.
-Кодеки v1.1 принимают также v1.0; старый клиент, понимающий только v1.0,
-отклоняет Info v1.1. Автоматическое понижение версии не определено.
-Форматы v1.0, UUID GATT и major=1 в заголовках фрагментов не изменены.
+Any subset of the mask for the corresponding version is accepted, including 0x0000. Bit 0 does not mean LIVE_SAMPLE; bit 4 does not imply LIVE_READY or a journal. v1.0 with bit 0x0010 is invalid. Unknown bits are prohibited; otherwise, INVALID_MESSAGE. Operation-specific capability requirements are checked by the layer above the codec. LIVE_SAMPLE requires both Info v1.1 and capability 0x0010.
 
-При наличии соответствующей возможности после подписки CCCD устройство выдаёт READY через LIVE_READY и STATUS при
-изменении состояния. Это не подтверждает доставку. Для восстановления
-пропущенных notifications всегда используется FETCH. Один central одновременно.
-Остановка получения телефоном не останавливает автономные измерения ESP32.
-LIVE_SAMPLE — отдельный предварительный просмотр без восстановления через FETCH
-(раздел 5.1). Он не требует journal, TIME_SET или ACK_BATCH.
+An unknown major or minor (including 1.2) prohibits commands and import. v1.1 codecs also accept v1.0; an older client that understands only v1.0 rejects Info v1.1. Automatic version downgrade is not defined. The v1.0 formats, GATT UUIDs and major=1 in fragment headers are unchanged.
 
-## 4. Кодирование и фрагментация
+When the corresponding capability is available, after CCCD subscription the device emits READY records through LIVE_READY and emits STATUS on state changes. This does not confirm delivery. FETCH is always used to recover missed notifications. Only one central is allowed at a time. Stopping reception on the phone does not stop autonomous measurements on the ESP32. LIVE_SAMPLE is a separate preview without recovery through FETCH (section 5.1). It does not require journal, TIME_SET or ACK_BATCH.
 
-Все числа little-endian без выравнивания и padding. UUID — 16 байт в порядке
-пар hex канонической строки, без смешанного Microsoft GUID byte order.
-uint64 обрабатываются в JavaScript как BigInt/строка, не небезопасный Number.
-Все UUID данных (deviceId, measurementId, bootId, segmentId, batchId) — UUID v4
-с RFC variant (старшие биты байта 8 равны 10). batchId создаётся на ESP32 для
-нового снимка; повтор ACK сохраняет исходный batchId. К GATT UUID это правило
-проверки версии данных не применяется.
-READY.utcMs, TIME_SET.utcMs и TIME_ACCEPTED.utcMs имеют общий включительный
-диапазон 0001-01-01T00:00:00.000Z .. 9999-12-31T23:59:59.999Z:
-int64 Unix milliseconds от -62135596800000 до 253402300799999. Ноль и отрицательные
-значения внутри диапазона допустимы. Выход за диапазон отклоняется.
-Качество часов и серверный предел будущего времени — отдельные правила.
-Все ppm целые 1..100000; дополнительно firmware проверяет корректность SCD41.
+## 4. Encoding and fragmentation
 
-Control и Events передают ATT values длиной 7..20 байт:
+All numbers are little-endian, without alignment or padding. UUIDs are 16 bytes in the order of hexadecimal pairs in the canonical string, without mixed Microsoft GUID byte order. JavaScript handles uint64 as BigInt/string, not as an unsafe Number.
 
-| Смещение | Поле |
+All data UUIDs (deviceId, measurementId, bootId, segmentId, batchId) are UUID v4 with the RFC variant (the most significant bits of byte 8 are 10). The ESP32 creates batchId for a new snapshot; an ACK retry preserves the original batchId. This data-version validation rule does not apply to GATT UUIDs.
+
+READY.utcMs, TIME_SET.utcMs and TIME_ACCEPTED.utcMs share the inclusive range 0001-01-01T00:00:00.000Z .. 9999-12-31T23:59:59.999Z: int64 Unix milliseconds from -62135596800000 to 253402300799999. Zero and negative values within the range are valid. Out-of-range values are rejected. Clock quality and the server's future-time limit are separate rules. All ppm values are integers in 1..100000; firmware additionally validates SCD41 readings.
+
+Control and Events transmit ATT values of 7..20 bytes:
+
+| Offset | Field |
 | --- | --- |
 | 0 | major:u8 = 1 |
 | 1 | type:u8 |
 | 2..3 | messageId:u16 |
-| 4 | fragmentIndex:u8, с 0 |
+| 4 | fragmentIndex:u8, starting at 0 |
 | 5 | fragmentCount:u8, 1..10 |
-| 6..19 | fragment payload, 1..14 байт |
+| 6..19 | fragment payload, 1..14 bytes |
 
-Логическое сообщение = `body || crc32:u32`; длина 4..128 байт.
-CRC-32/ISO-HDLC: polynomial 0x04C11DB7 (reflected 0xEDB88320), init/xorout
-0xFFFFFFFF, refin/refout true. CRC считается над
-`major:u8 || type:u8 || messageId:u16-LE || body` и добавляется little-endian.
-Это контроль повреждения, не аутентификация.
+A logical message is `body || crc32:u32`; its length is 4..128 bytes. CRC-32/ISO-HDLC: polynomial 0x04C11DB7 (reflected 0xEDB88320), init/xorout 0xFFFFFFFF, refin/refout true. CRC is computed over `major:u8 || type:u8 || messageId:u16-LE || body` and appended little-endian. This detects corruption; it is not authentication.
 
-Все фрагменты, кроме последнего, несут ровно 14 байт; последний 1..14.
-fragmentCount = ceil(logicalLength / 14). Даже пустой body передаёт 4 байта CRC.
-Нельзя продолжать запись GATT длиннее 20 байт: увеличенный MTU необязателен.
+Every fragment except the last carries exactly 14 bytes; the last carries 1..14. fragmentCount = ceil(logicalLength / 14). Even an empty body carries 4 CRC bytes. A GATT write must not exceed 20 bytes: an increased MTU is optional.
 
-Область уникальности messageId — одно BLE-соединение И одно направление.
-Телефон Control использует 0..65534 (65535 зарезервирован), ESP32 Events —
-0..65535. Пространства независимы: Control messageId=7 и Events messageId=7
-допустимы одновременно. requestId ответа ссылается на Control ID и не резервирует
-номер Events. Возрастание ID не требуется; уникальность обязательна.
-Все фрагменты одного сообщения используют один ID.
+The uniqueness scope of messageId is one BLE connection AND one direction. Phone Control uses 0..65534 (65535 is reserved); ESP32 Events uses 0..65535. The namespaces are independent: Control messageId=7 and Events messageId=7 may exist simultaneously. A response's requestId refers to the Control ID and does not reserve an Events number. Increasing IDs are not required; uniqueness is mandatory. All fragments of one message use the same ID.
 
-Начатая сборка расходует ID даже после ошибки CRC, полей, порядка или таймаута.
-Отправитель считает ID израсходованным с первой попытки отправки. При ошибке или
-неопределённом результате повторяется ПОЛНОЕ логическое сообщение с НОВЫМ
-messageId и пересчитанным CRC. Повтор отдельных фрагментов запрещён.
-Повтор операции сохраняет measurementId и данные READY; повтор ACK также
-сохраняет batchId/throughSequence/count/digest. requestId нового ответа ссылается
-на новый Control messageId. При непригодном заголовке получатель может не знать
-ID, но отправитель всё равно не вправе переиспользовать отправленный номер.
+Starting assembly consumes the ID even after a CRC, field, ordering or timeout error. The sender considers an ID consumed from the first transmission attempt. After an error or an uncertain outcome, the ENTIRE logical message is retried with a NEW messageId and a recomputed CRC. Retrying individual fragments is prohibited. Retrying an operation preserves measurementId and READY data; an ACK retry also preserves batchId/throughSequence/count/digest. The requestId of a new response refers to the new Control messageId. If the header is unusable, the receiver may not know the ID, but the sender is still not allowed to reuse the transmitted number.
 
-При исчерпании пространства хотя бы одного направления требуется disconnect и
-новое BLE-соединение. Wraparound, повтор ID и сброс учёта уникальности на том же
-соединении запрещены. Новое соединение сбрасывает оба пространства ID, но не
-measurementId и durable-курсор. Получатель ведёт отдельный bounded bitmap
-каждого направления. Stateless-энкодер не распределяет ID: это обязанность
-будущего транспортного уровня. Фрагменты
-одного сообщения идут строго по порядку и подряд: interleaving фрагментов разных
-сообщений запрещён. Между полными сообщениями interleaving LIVE/пакета допустим.
-Неверный индекс, повтор, размер, count, CRC или версия сбрасывает сборку целиком;
-частичные RECORD никогда не сохраняются. Размер проверяется ДО выделения памяти.
+If either direction's ID space is exhausted, a disconnect and a new BLE connection are required. Wraparound, ID reuse and resetting uniqueness tracking on the same connection are prohibited. A new connection resets both ID spaces, but not measurementId or the durable cursor. The receiver maintains a separate bounded bitmap for each direction. A stateless encoder does not allocate IDs: this is the responsibility of the future transport layer.
 
-Таймаут сборки — 5 секунд от первого фрагмента, не продлевается. Control
-передаётся по одному write-with-response; ATT write response означает только
-приём фрагмента. Результат команды — отдельное Events-сообщение. Если заголовок
-Control читаем, ERROR ссылается на его messageId; иначе достаточно ATT rejection.
-Для повреждённого Events телефон прекращает пакет и позже повторяет FETCH.
+Fragments of one message are sent strictly in order and consecutively: interleaving fragments of different messages is prohibited. Interleaving LIVE/batch traffic between complete messages is permitted. An invalid index, duplicate, size, count, CRC or version resets the entire assembly; partial RECORDs are never stored. Size is checked BEFORE memory allocation.
 
-## 5. Сообщения и точные body
+The assembly timeout is 5 seconds from the first fragment and is not extended. Control is transmitted one write-with-response at a time; the ATT write response means only that the fragment was accepted. The command result is a separate Events message. If the Control header is readable, ERROR refers to its messageId; otherwise, an ATT rejection is sufficient. For a corrupted Events message, the phone stops the batch and retries FETCH later.
 
-Обозначения: `u8/u16/u32/u64/i64` — целые указанной разрядности;
-`uuid` — 16 байт; `sha256` — 32 байта. Никаких неописанных байтов не допускается.
-Request ID в ответах — messageId исходной команды, а не messageId ответа.
-Неизвестные type/tag/коды флагов и неверные точные длины в v1 — INVALID_MESSAGE.
-GAP_NOTICE использует те же reason 1/2, что канонический GAP.
+## 5. Messages and exact bodies
 
-| type | Направление, имя | Body по порядку | Body / с CRC, байт |
+Notation: `u8/u16/u32/u64/i64` are integers of the specified bit width; `uuid` is 16 bytes; `sha256` is 32 bytes. No unspecified bytes are allowed. A response's request ID is the original command's messageId, not the response's messageId. Unknown types/tags/flag codes and incorrect exact lengths in v1 are INVALID_MESSAGE. GAP_NOTICE uses the same reasons 1/2 as canonical GAP.
+
+| type | Direction, name | Body in order | Body / with CRC, bytes |
 | --- | --- | --- | --- |
-| 0x01 | C→D GET_STATUS | пусто | 0 / 4 |
+| 0x01 | C→D GET_STATUS | empty | 0 / 4 |
 | 0x02 | C→D TIME_SET | bootId:uuid, utcMs:i64, uncertaintyMs:u32 | 28 / 32 |
 | 0x03 | C→D FETCH | afterSequence:u64, limit:u16 (1..100) | 10 / 14 |
 | 0x04 | C→D ACK_BATCH | batchId:uuid, throughSequence:u64, count:u16, digest:sha256 | 58 / 62 |
@@ -211,262 +117,149 @@ GAP_NOTICE использует те же reason 1/2, что каноничес�
 | 0x8A | D→C LIVE_SAMPLE (v1.1) | bootId:uuid, sampleCounter:u64, uptimeMs:u64, ppm:u32 | 36 / 40 |
 | 0xFF | D→C ERROR | requestId:u16, code:u8 | 3 / 7 |
 
-STATUS без запроса использует requestId=65535; этот номер Control зарезервирован.
-Остальные requestId — 0..65534. timeValid — 0/1; storageState — 0 OK или 1 ERROR.
-oldest/latest — границы доступных записей, 0/0 для пустого журнала.
-`overwrittenThrough` — последний
-вытесненный sequence, 0 если вытеснения не было. firstUndated=0 при отсутствии.
-Если afterSequence больше latest — INVALID_CURSOR: нельзя молча сбрасывать
-локальный курсор. Устройство сообщает актуальный STATUS по отдельному запросу.
+Unsolicited STATUS uses requestId=65535; this Control number is reserved. Other requestId values are 0..65534. timeValid is 0/1; storageState is 0 OK or 1 ERROR. oldest/latest are the bounds of available records, or 0/0 for an empty journal. `overwrittenThrough` is the last evicted sequence, or 0 if no eviction has occurred. firstUndated=0 if none exists.
 
-TIME_SET с чужим bootId отклоняется; utcMs всех трёх форматов проверяется по
-общему диапазону раздела 4, без дополнительного требования положительности.
-uncertaintyMs — оценка неопределённости на устройстве, не нулевая
-гарантия точности. CLOCK_INVALID при неприемлемом времени. Ответ TIME_ACCEPTED
-означает сохранение привязки; перевод большого UNDATED-участка может ещё идти,
-и FETCH тогда возвращает BUSY. Ошибки SCD41 сообщаются SENSOR_ERROR асинхронно
-с requestId=65535. Строки ошибок/JSON в бинарном протоколе отсутствуют.
+If afterSequence is greater than latest, return INVALID_CURSOR: the local cursor must not be silently reset. The device reports the current STATUS in response to a separate request.
 
-### 5.1 LIVE_SAMPLE: предварительный просмотр v1.1
+TIME_SET with a different bootId is rejected; utcMs in all three formats is validated against the shared range in section 4, without an additional positivity requirement. uncertaintyMs is an estimate of uncertainty on the device, not a zero-error accuracy guarantee. CLOCK_INVALID indicates unacceptable time. TIME_ACCEPTED means that the anchor has been stored; conversion of a large UNDATED range may still be in progress, in which case FETCH returns BUSY. SCD41 errors are reported asynchronously as SENSOR_ERROR with requestId=65535. The binary protocol contains no error strings/JSON.
 
-Точные смещения в body: bootId — 0..15, sampleCounter — 16..23,
-uptimeMs — 24..31, ppm — 32..35. bootId — UUID v4 с RFC variant;
-числа little-endian, без padding. sampleCounter: 1..2^64−1;
-uptimeMs: 0..2^64−1; ppm: целое 1..100000 с дополнительной проверкой SCD41
-в firmware. В JavaScript оба u64 обрабатываются как BigInt.
-Тело 36 байт плюс CRC32 — 40 байт; три ATT-фрагмента длиной 20, 20, 18 байт.
-CRC и заголовок major=1 считаются по разделу 4, type=0x8A.
+### 5.1 LIVE_SAMPLE: v1.1 preview
 
-**sampleCounter не является sequence журнала.** Это RAM-счётчик корректных
-образцов датчика в пределах bootId, начиная с 1. Новое измерение увеличивает
-его; отсутствие телефона, disconnect/reconnect, смена режима просмотра и
-восстановление после ошибки датчика его не сбрасывают. Ошибочное чтение не
-создаёт образец. При новой загрузке меняется bootId и счётчик начинается с 1.
-При исчерпании u64 публикация прекращается до новой загрузки; wraparound запрещён.
-Повтор того же образца сохраняет bootId/sampleCounter/uptimeMs/ppm, но использует
-новый транспортный messageId. Пропуски счётчика допустимы и не образуют GAP журнала.
-Кодек проверяет диапазоны; порядок/повторы и соответствие bootId текущему STATUS
-проверяет транспорт. Передатчик обязан объявить соответствующие версию и capability;
-приёмник обязан проверить их до использования LIVE_SAMPLE.
+Exact body offsets: bootId — 0..15, sampleCounter — 16..23, uptimeMs — 24..31, ppm — 32..35. bootId is a UUID v4 with the RFC variant; numbers are little-endian, without padding. sampleCounter: 1..2^64−1; uptimeMs: 0..2^64−1; ppm: integer 1..100000 with additional SCD41 validation in firmware. In JavaScript, both u64 fields are handled as BigInt. The 36-byte body plus CRC32 is 40 bytes; three ATT fragments have lengths of 20, 20 and 18 bytes. CRC and the major=1 header follow section 4, with type=0x8A.
 
-LIVE_SAMPLE не содержит measurementId, segmentId, sequence или utcMs,
-не является canonicalEntry/READY и не обещает durable commit. uptimeMs — время
-получения образца с начала bootId; время приёма телефоном не подменяет UTC датчика.
-Доставка best-effort: уведомление не сохраняется для FETCH, не требует ACK_BATCH,
-не продвигает курсор и не импортируется как обычное измерение в историю/backend.
-Формат LIVE_READY (0x86) и его обязательства сохранения/UTC остаются прежними.
+**sampleCounter is not the journal sequence.** It is a RAM counter of valid sensor samples within a bootId, starting at 1. A new measurement increments it; absence of a phone, disconnect/reconnect, a change of preview mode and recovery from a sensor error do not reset it. An invalid read does not create a sample. A new boot changes bootId and restarts the counter at 1. When u64 is exhausted, publication stops until a new boot; wraparound is prohibited. Retransmission of the same sample preserves bootId/sampleCounter/uptimeMs/ppm but uses a new transport messageId. Counter gaps are allowed and do not create a journal GAP.
 
-Текущая минимальная firmware реализует следующий режим preview:
+The codec validates ranges; the transport checks ordering/duplicates and whether bootId matches the current STATUS. The transmitter must advertise the appropriate version and capability; the receiver must check them before using LIVE_SAMPLE.
 
-- После подписки на Events central отправляет GET_STATUS. Передатчик открывает
-  поток после успешного принятия NimBLE всех четырёх фрагментов STATUS. Notify
-  не подтверждается приложением; central всё равно проверяет собранный STATUS
-  и requestId. bootId в LIVE_SAMPLE совпадает с bootId этого STATUS.
-- Передаются только корректные измерения, полученные после завершения handshake,
-  каждое не более одного раза. Образцы до/во время handshake пропускаются.
-  Между задачами есть один защищённый буфер последнего образца с перезаписью;
-  задержка передачи может приводить к пропускам sampleCounter.
-- Очередь ответов Control ограничена четырьмя ожидающими сообщениями. Они имеют
-  приоритет перед следующим LIVE_SAMPLE. Начатое сообщение передаётся целиком,
-  его поля не меняются; фрагменты разных сообщений не перемешиваются.
-- Ошибка CRC/I²C, CO₂=0 или 30 успешных опросов без готового измерения аннулируют
-  ожидающий образец. Старое значение не повторяется. Если аннулированное сообщение
-  передано частично, соединение закрывается; уже принятые ATT уведомления отозвать
-  нельзя. Опрос продолжается, восстановление не сбрасывает sampleCounter.
-  SENSOR_ERROR пока выводится только как ошибка в monitor, без пакета ERROR.
-- Disconnect удаляет ожидающие сообщения. Отписка закрывает доступ к preview;
-  повторная подписка требует нового GET_STATUS/STATUS. При отписке посреди
-  сообщения соединение закрывается. Только новое соединение сбрасывает messageId,
-  но не sampleCounter. Events использует 0..65535 без повторов и закрывает
-  соединение после последнего сообщения с ID 65535. Ошибка отправки также
-  закрывает соединение; автоматического повтора сообщений нет.
+LIVE_SAMPLE contains no measurementId, segmentId, sequence or utcMs, is not a canonicalEntry/READY and does not promise a durable commit. uptimeMs is the sample acquisition time since the start of bootId; the phone's reception time does not replace the sensor's UTC. Delivery is best-effort: the notification is not stored for FETCH, does not require ACK_BATCH, does not advance the cursor and is not imported as an ordinary measurement into history/backend. The LIVE_READY (0x86) format and its persistence/UTC obligations remain unchanged.
 
-Успешная передача и корректные CRC подтверждают целостность данных, а не точность
-датчика; это особенно существенно после попадания изопропанола на мембрану SCD41.
+The current minimal firmware implements the following preview mode:
 
-## 6. Канонические записи и digest
+- After subscribing to Events, the central sends GET_STATUS. The transmitter opens the stream after NimBLE has successfully accepted all four STATUS fragments. Notify is not acknowledged by the application; the central still validates the assembled STATUS and requestId. bootId in LIVE_SAMPLE matches bootId in that STATUS.
+- Only valid measurements acquired after completion of the handshake are transmitted, each at most once. Samples acquired before/during the handshake are skipped. There is one protected overwrite buffer for the latest sample between tasks; transmission delays may cause sampleCounter gaps.
+- The Control response queue is limited to four pending messages. They take priority over the next LIVE_SAMPLE. A started message is transmitted in full, with immutable fields; fragments of different messages are not interleaved.
+- A CRC/I²C error, CO₂=0 or 30 successful polls without a ready measurement invalidates the pending sample. The old value is not repeated. If an invalidated message has been partially transmitted, the connection is closed; ATT notifications already accepted cannot be recalled. Polling continues; recovery does not reset sampleCounter. SENSOR_ERROR is currently logged only as an error in monitor, without an ERROR packet.
+- Disconnect discards pending messages. Unsubscription closes access to preview; resubscription requires a new GET_STATUS/STATUS. Unsubscribing in the middle of a message closes the connection. Only a new connection resets messageId, but not sampleCounter. Events uses 0..65535 without reuse and closes the connection after the final message with ID 65535. A send failure also closes the connection; there are no automatic message retries.
 
-`canonicalEntry` имеет один из трёх точных форматов:
+Successful transmission and correct CRCs confirm data integrity, not sensor accuracy; this is especially important after isopropanol has contacted the SCD41 membrane.
 
-| tag | Поля, включая tag | Размер |
+## 6. Canonical entries and digest
+
+`canonicalEntry` has one of three exact formats:
+
+| tag | Fields, including tag | Size |
 | --- | --- | --- |
 | 0x01 READY | tag:u8, sequence:u64, measurementId:uuid, bootId:uuid, segmentId:uuid, uptimeMs:u64, utcMs:i64, ppm:u32 | 77 |
 | 0x02 UNDATABLE | tag:u8, sequence:u64, measurementId:uuid, bootId:uuid, segmentId:uuid, uptimeMs:u64, ppm:u32 | 69 |
 | 0x03 GAP | tag:u8, fromSequence:u64, toSequence:u64, reason:u8 | 18 |
 
-GAP reason: 1 OVERWRITTEN, 2 CORRUPT. GAP с from>to недопустим.
-Состояние UNDATED не имеет canonicalEntry и не входит в подтверждаемый пакет.
+GAP reason: 1 OVERWRITTEN, 2 CORRUPT. A GAP with from>to is invalid. UNDATED has no canonicalEntry and is not included in an acknowledged batch.
 
-Канонический заголовок digest: `batchId:uuid || afterSequence:u64 ||
-throughSequence:u64 || count:u16` (34 байта). Затем идут ровно count
-canonicalEntry в возрастающем порядке sequence/диапазонов. SHA-256 считается над:
+The canonical digest header is `batchId:uuid || afterSequence:u64 || throughSequence:u64 || count:u16` (34 bytes). It is followed by exactly count canonicalEntry values in ascending sequence/range order. SHA-256 is computed over:
 
 ```text
 ASCII("LL-BATCH-V1") || 0x00 || canonicalHeader || entry[0] || ... || entry[count-1]
 ```
 
-Префикс — ровно 12 байт: `4C 4C 2D 42 41 54 43 48 2D 56 31 00`.
-requestId, messageId, номера фрагментов и CRC НЕ входят в digest.
-Digest относится к составу конкретного пакета, не ко всему журналу.
+The prefix is exactly 12 bytes: `4C 4C 2D 42 41 54 43 48 2D 56 31 00`. requestId, messageId, fragment indices and CRC are NOT included in the digest. The digest describes the contents of a specific batch, not the entire journal.
 
-## 7. Догрузка, курсор и атомарный импорт
+## 7. Journal download, cursor and atomic import
 
-Для существующих записей курсор разрешено продвигать только через импортированные
-READY или явно сохранённые UNDATABLE. Через физически отсутствующий участок
-он проходит только после атомарного сохранения GAP, без заявления об импорте
-утраченных измерений. UNDATED пересекать нельзя.
+For existing records, the cursor may advance only through imported READY records or explicitly stored UNDATABLE records. It crosses a physically missing range only after a GAP has been atomically stored, without claiming that lost measurements were imported. An UNDATED record must not be crossed.
 
-Курсор телефона хранится по deviceId и означает последний окончательно
-обработанный sequence, а не последнее увиденное LIVE-измерение.
+The phone stores a cursor per deviceId. It denotes the last sequence that has been finally processed, not the last LIVE measurement observed.
 
-FETCH рассматривает журнал строго начиная с afterSequence+1. Устройство
-фиксирует RAM-снимок максимум 100 canonicalEntry (READY/UNDATABLE/GAP).
-Вытеснение во flash после этого снимок не меняет. batchId — свежий UUID v4.
-count считает элементы, а не количество sequence внутри GAP; 1<=count<=limit<=100.
-READY не больше 100. Пустого BATCH_BEGIN нет.
-throughSequence — последний sequence последнего элемента (toSequence для GAP).
-Элементы без перекрытий полностью покрывают интервал
-`(afterSequence, throughSequence]`: неописанные дырки запрещены.
-Вытесненная часть до oldest представляется GAP, а не бесшумным прыжком курсора.
+FETCH examines the journal strictly from afterSequence+1. The device captures a RAM snapshot of at most 100 canonicalEntry values (READY/UNDATABLE/GAP). Later flash eviction does not change this snapshot. batchId is a fresh UUID v4. count counts entries, not the number of sequence values inside a GAP; 1<=count<=limit<=100. There are at most 100 READY records. There is no empty BATCH_BEGIN.
 
-Если перед UNDATED есть терминальные элементы, сначала выдаётся пакет только
-с ними. Если первый следующий элемент UNDATED текущей загрузки — TIME_PENDING,
-не пустой пакет. Приложение останавливает цикл догрузки, не повторяет тот же
-FETCH по таймеру. Возобновление: после TIME_ACCEPTED и завершения обработки,
-после смены bootId или по явному действию пользователя. При BUSY допускается
-повтор по явному действию; бесконечного polling нет. При смене bootId старый
-участок становится UNDATABLE и перестаёт блокировать курсор. READY за барьером
-UNDATED могут приходить LIVE, но не позволяют перескочить барьер основным курсором.
-Если afterSequence==latest, STATUS с requestId команды означает конец догрузки.
+throughSequence is the last sequence of the last entry (toSequence for GAP). The non-overlapping entries completely cover `(afterSequence, throughSequence]`: unreported holes are prohibited. The evicted portion before oldest is represented as GAP, not a silent cursor jump.
 
-Телефон собирает полный пакет и проверяет batchId, count, digest, непрерывное
-покрытие, границы, уникальность ID, допустимость полей и отсутствие лишних байтов.
-Одной транзакцией IndexedDB он:
+If terminal entries precede UNDATED, a batch containing only those entries is returned first. If the first next entry is UNDATED from the current boot, return TIME_PENDING, not an empty batch. The application stops the download loop and does not repeat the same FETCH on a timer. Resumption occurs after TIME_ACCEPTED and completion of processing, after a bootId change or through explicit user action. BUSY permits a retry through explicit action; there is no endless polling. When bootId changes, the old range becomes UNDATABLE and no longer blocks the cursor. READY records beyond an UNDATED barrier may arrive LIVE, but do not permit the main cursor to skip the barrier.
 
-1. Импортирует READY с исходными ID, `source=sensor`, `syncStatus=pending`.
-   Уже существующая идентичная запись не меняется, в том числе её synced.
-   Другие данные под тем же measurementId — конфликт: откат всего пакета.
-2. Сохраняет UNDATABLE в отдельном хранилище и GAP как отметки недоступности.
-   GAP не стирает уже имеющиеся локальные измерения; график разрывается там,
-   где нет локальных данных, закрывающих известную потерю.
-3. Сохраняет курсор throughSequence и квитанцию `(batchId, count, digest)`.
+If afterSequence==latest, STATUS with the command's requestId means the download is complete.
 
-Только после commit отправляется ACK_BATCH. При ошибке/переполнении IndexedDB
-ACK и продвижения курсора нет. На повреждённый/неполный пакет ACK не отправляется.
-ACK проверяется по сохранённому на ESP32 RAM-снимку: batchId, throughSequence,
-count и digest должны совпасть. Одинаковый повтор ACK возвращает ACK_ACCEPTED.
-Чужой/изменённый ACK — ACK_MISMATCH, истёкший/утраченный снимок — BATCH_EXPIRED.
-ACK завершает протокольный обмен, но **не удаляет ни одной записи**, не освобождает
-кольцо и не является подтверждением HTTP-синхронизации.
+The phone assembles the entire batch and validates batchId, count, digest, continuous coverage, bounds, ID uniqueness, field validity and the absence of extra bytes. In a single IndexedDB transaction, it:
 
-Одновременно один пакет. Новый FETCH до ACK/CANCEL/истечения — BUSY.
-CANCEL не меняет журнал, данные телефона или курсор. При disconnect снимок
-сбрасывается; после reconnect телефон продолжает с durable-курсора. Если commit
-был успешен, но ACK потерян, данные всё равно безопасно сохранены. До истечения
-снимка допустим повтор ACK, после — FETCH со своего курсора. Если commit не было,
-повторный FETCH может вернуть новый batchId, но те же measurementId и данные.
+1. Imports READY with the original IDs, `source=sensor`, `syncStatus=pending`. An existing identical record is unchanged, including its synced status. Different data under the same measurementId is a conflict: roll back the entire batch.
+2. Stores UNDATABLE in a separate store and GAP as unavailability markers. GAP does not erase existing local measurements; the chart breaks where no local data covers the known loss.
+3. Stores the throughSequence cursor and the `(batchId, count, digest)` receipt.
 
-LIVE_READY импортируется идемпотентно с теми же правилами неизменности, но не
-продвигает основной курсор и не требует ACK_BATCH. Мобильная запись под тем же ID
-не должна дублироваться при последующей догрузке.
+ACK_BATCH is sent only after commit. An IndexedDB error/capacity overflow permits neither ACK nor cursor advancement. A corrupted/incomplete batch is not acknowledged.
 
-## 8. Кольцо, удаление истории, потери курсора
+ACK is checked against the RAM snapshot retained on the ESP32: batchId, throughSequence, count and digest must match. An identical repeated ACK returns ACK_ACCEPTED. An unrelated/modified ACK produces ACK_MISMATCH; an expired/lost snapshot produces BATCH_EXPIRED. ACK completes the protocol exchange but **does not delete any record**, does not free the ring buffer and does not acknowledge HTTP synchronization.
 
-Каждое вытеснение расширяет overwrittenThrough; GAP_NOTICE может объединять
-последовательные вытеснения. Уведомление не гарантировано: истинное состояние
-определяют STATUS и GAP внутри FETCH. GAP_NOTICE не двигает курсор телефона.
-После вытеснения уже импортированных записей разрыв в локальной истории не нужен.
-Повреждение flash сообщается как CORRUPT только если границы потери определены;
-если последовательность восстановить нельзя, STORAGE_ERROR, без выдуманных границ.
+Only one batch may be active at a time. A new FETCH before ACK/CANCEL/expiry returns BUSY. CANCEL does not change the journal, phone data or cursor. Disconnect discards the snapshot; after reconnect, the phone continues from its durable cursor. If commit succeeded but ACK was lost, the data is still safely stored. ACK may be retried before the snapshot expires; afterwards, use FETCH from the phone's cursor. If no commit occurred, a repeated FETCH may return a new batchId but the same measurementId values and data.
 
-Удаление локальной истории атомарно удаляет связанные курсоры/квитанции/отметки.
-Активный импорт отменяется, его старый ответ не должен восстановить курсор после
-удаления. По следующему явному запросу истории устройство читается с afterSequence=0.
-Так же работает переустановка/утрата IndexedDB. Сначала GAP для уже вытесненной
-части, затем ВСЕ ещё доступные терминальные записи. Старые ACK этому не мешают.
-Ранее удалённая история может снова появиться — это ожидаемое восстановление,
-которое UI должен объяснять. Вытесненные записи с ESP32 восстановить нельзя.
+LIVE_READY is imported idempotently under the same immutability rules, but does not advance the main cursor and does not require ACK_BATCH. A mobile record under the same ID must not be duplicated during a subsequent journal download.
 
-При повторном импорте после удаления READY получают pending. Backend уже знает
-их measurementId и принимает их как duplicates при идентичном содержимом.
-Часы/данные READY нельзя исправлять задним числом ни на одном участнике.
+## 8. Ring buffer, history deletion and cursor loss
 
-## 9. Ошибки и таймауты
+Each eviction advances overwrittenThrough; GAP_NOTICE may combine consecutive evictions. Notification is not guaranteed: STATUS and GAP inside FETCH determine the actual state. GAP_NOTICE does not advance the phone's cursor. Eviction of records already imported does not require a gap in local history.
 
-| Код | Имя | Действие |
+Flash corruption is reported as CORRUPT only if the loss bounds are known; if the sequence cannot be recovered, return STORAGE_ERROR without inventing bounds.
+
+Deleting local history atomically removes the associated cursors/receipts/markers. Active import is cancelled; its old response must not restore the cursor after deletion. On the next explicit history request, the device is read from afterSequence=0. Reinstallation/loss of IndexedDB works the same way. First return GAP for the portion already evicted, then ALL terminal records still available. Previous ACKs do not prevent this.
+
+Previously deleted history may reappear: this is expected recovery that the UI must explain. Evicted ESP32 records cannot be recovered.
+
+On reimport after deletion, READY records receive pending status. The backend already knows their measurementId values and accepts them as duplicates if their contents are identical. No participant may retroactively correct READY clocks/data.
+
+## 9. Errors and timeouts
+
+| Code | Name | Action |
 | --- | --- | --- |
-| 0x01 | UNSUPPORTED_VERSION | прекратить обмен |
-| 0x02 | INVALID_MESSAGE | отклонить сообщение/пакет |
-| 0x03 | BUSY | дождаться завершения или явного повтора |
-| 0x04 | INVALID_CURSOR | запросить STATUS, показать несогласованность |
-| 0x05 | CLOCK_INVALID | отклонить время/чужой bootId |
-| 0x06 | STORAGE_ERROR | показать ошибку журнала |
-| 0x07 | SENSOR_ERROR | показать ошибку датчика, начать новый сегмент при восстановлении |
-| 0x08 | ACK_MISMATCH | ACK не принят, ничего не удалять |
-| 0x09 | BATCH_EXPIRED | повторить догрузку/продолжить с durable-курсора |
-| 0x0A | CRC_MISMATCH | отбросить сообщение |
-| 0x0B | FRAGMENT_ERROR | отбросить сборку |
+| 0x01 | UNSUPPORTED_VERSION | stop the exchange |
+| 0x02 | INVALID_MESSAGE | reject the message/batch |
+| 0x03 | BUSY | wait for completion or an explicit retry |
+| 0x04 | INVALID_CURSOR | request STATUS and show the inconsistency |
+| 0x05 | CLOCK_INVALID | reject the time/mismatched bootId |
+| 0x06 | STORAGE_ERROR | show a journal error |
+| 0x07 | SENSOR_ERROR | show a sensor error; start a new segment on recovery |
+| 0x08 | ACK_MISMATCH | ACK was not accepted; delete nothing |
+| 0x09 | BATCH_EXPIRED | retry the journal download/continue from the durable cursor |
+| 0x0A | CRC_MISMATCH | discard the message |
+| 0x0B | FRAGMENT_ERROR | discard the assembly |
 
-TIME_PENDING — штатный ответ, не ошибка. STORAGE_FULL отсутствует: исправное
-кольцо вытесняет старые записи. Ошибки, не привязанные к команде, requestId=65535.
+TIME_PENDING is a normal response, not an error. STORAGE_FULL does not exist: a healthy ring buffer evicts old records. Errors unrelated to a command use requestId=65535.
 
-- Сборка сообщения: 5 секунд от первого фрагмента.
-- Первый ответ команды: 5 секунд после последнего Control write response.
-- Весь пакет до BATCH_END: 30 секунд с BATCH_BEGIN, без продления от LIVE.
-- Ожидание ACK/CANCEL на ESP32 и кэш повторного ACK: 30 секунд после BATCH_END.
-- После таймаута неполный пакет отбрасывается. Автоматических бесконечных повторов
-  нет; повтор с jitter/backoff можно определить позднее. Нативный BLE transport
-  должен ограничивать очередь, не бросать неограниченный поток в WebView.
-- Во время TIME_SET допускается остановить LIVE до завершения обновления журнала;
-  подтверждённые записи всегда доступны через последующий FETCH.
+- Message assembly: 5 seconds from the first fragment.
+- First command response: 5 seconds after the last Control write response.
+- Entire batch through BATCH_END: 30 seconds from BATCH_BEGIN, not extended by LIVE traffic.
+- ESP32 waiting for ACK/CANCEL and caching repeated ACK: 30 seconds after BATCH_END.
+- After timeout, the incomplete batch is discarded. There are no automatic endless retries; retries with jitter/backoff may be defined later. The native BLE transport must bound its queue rather than send an unlimited stream into WebView.
+- During TIME_SET, LIVE may be paused until the journal update completes; confirmed records are always available through a subsequent FETCH.
 
-## 10. Проверка размеров
+## 10. Size verification
 
-Наибольший body — BATCH_ENTRY READY: 16 + 77 = 93 байта; с CRC — 97,
-ceil(97/14)=7 фрагментов. Самый большой ACK — 62 байта с CRC, 5 фрагментов.
-Все остальные сообщения из таблицы меньше. Логический предел 128 даёт максимум
-10 фрагментов: 9*14 + 2. Каждый ATT value не больше 6+14=20 байт; Info=20.
-SHA-256 32 байта передаётся фрагментами, не в одном ATT value.
-RAM-снимок <=100*77=7700 канонических байт плюс заголовок и служебные структуры;
-пакет целиком не объявляется одним логическим сообщением.
+The largest body is BATCH_ENTRY READY: 16 + 77 = 93 bytes; with CRC, 97 bytes, ceil(97/14)=7 fragments. The largest ACK is 62 bytes with CRC, or 5 fragments. All other messages in the table are smaller. The logical limit of 128 yields at most 10 fragments: 9*14 + 2. Every ATT value is at most 6+14=20 bytes; Info=20. The 32-byte SHA-256 is transmitted in fragments, not in a single ATT value.
 
-## 11. Существующий mobile и HTTP batch API
+The RAM snapshot contains <=100*77=7700 canonical bytes plus its header and bookkeeping structures; the entire batch is not represented as one logical message.
 
-Сейчас Co2Source выдаёт только time/ppm, Co2History создаёт локальные сегменты,
-а Co2Storage.append назначает ID симулятора. Это НЕ готовый путь BLE-импорта.
-Позднее потребуются расширение метаданных, уникальный индекс measurementId,
-атомарный импорт с курсором, отдельные UNDATABLE/GAP и проверка совпадения записей.
-Догрузка не должна маскироваться под поток новых показаний Co2Source.
-Транспортный reconnect может менять UI-сессию источника, но не канонический segmentId.
+## 11. Existing mobile application and HTTP batch API
 
-READY: deviceId из Info, source="sensor", measurementId исходный,
-measuredAt=ISO 8601 UTC с Z из utcMs, ppm исходный, segment=каноническая строка
-segmentId (36 символов). bootId/sequence/uptime — локальная служебная информация,
-не новые поля существующего POST /api/measurements/batch.
+The main UI uses Sensor readings; Simulator is not the default UI source. Co2Storage.append remains the simulator path. The separate READY import path already has a unique measurementId index, atomic import with a cursor, separate UNDATABLE/GAP storage and record equality checks. Firmware journal download is not yet available. Journal download must not masquerade as a stream of new Co2Source readings. A transport reconnect may change the source's UI session, but not the canonical segmentId.
 
-Mobile продолжает отправлять до 100 READY, группируя по deviceId/source.
-Сервер допускает до 500 в пакете, ppm 1..100000, segment до 80 символов,
-UTC не более чем на 5 минут в будущем; лимит тела 256 KiB. Ошибка валидации
-останавливает HTTP-синхронизацию, не меняя оригинал READY. Повторы идентичных
-measurementId дают duplicates; другие данные — 409 с откатом пакета.
-UNDATABLE и GAP никогда не подменяются фиктивными API-измерениями.
+### Browser LIVE_SAMPLE storage (client implementation, not a wire-contract change)
 
-## 12. Открытые вопросы прототипа
+BrowserBleSession displays valid received LIVE_SAMPLE values and saves them through a separate local storage path, not simulator append. DeviceId comes from Info. The client assigns a random MeasurementId once per new (deviceId, bootId, sampleCounter), stores source="sensor" and syncStatus="pending", and automatically uploads through POST /api/measurements/batch. The browser uses bootId as its local segment value. Persistent identity keys prevent a replay, including after reconnect, from creating a new row. Both uint64 fields remain BigInt in the protocol and decimal strings in storage.
 
-- Ёмкость flash-раздела, частота измерений, длительность автономной истории,
-  износ, конкретная crash-consistent реализация кольца и recovery-тесты.
-- Безопасность: pairing/bonding, шифрование, право читать историю, менять часы,
-  заводской сброс; UUID/CRC/digest не доказывают подлинность. До решения прототип
-  не считается защищённым от постороннего central.
-- Допустимая неопределённость UTC, проверка неверных часов телефона и дрейфа;
-  нельзя исправлять READY задним числом ради успешной серверной валидации.
-- UI и срок хранения UNDATABLE/отметок потерь; будущая совместимость с локальным
-  двухлетним хранением без вымышленного календарного времени.
-- Несколько телефонов, владение устройством и восстановление из backend пока
-  не определены; v1 допускает один central, ACK не означает серверную копию.
+For this browser-created record, MeasuredAt is the browser's wall-clock reception time, captured before asynchronous storage. It is not sensor UTC, an uptime-derived timestamp or a canonical READY timestamp. This is a separate client record derived from a received preview; it does not turn LIVE_SAMPLE into canonicalEntry/READY or add persistence, UTC, ACK or FETCH obligations to the device. Section 5.1 remains the normative wire contract.
 
-Источники для ограничений платформы (форматы выше — собственный протокол):
+Automatic and manual HTTP sends are serialized. API failure leaves records pending; retries preserve their original IDs and data. Samples missed while disconnected are not recovered. This browser storage change does not affect Android.
+
+READY: deviceId comes from Info, source="sensor", measurementId is the original ID, measuredAt is ISO 8601 UTC with Z derived from utcMs, ppm is unchanged, and segment is the canonical segmentId string (36 characters). bootId/sequence/uptime are local bookkeeping information, not new fields of the existing POST /api/measurements/batch.
+
+Mobile continues to send up to 100 READY records, grouped by deviceId/source. The server allows up to 500 per batch, ppm 1..100000, segment up to 80 characters, UTC no more than 5 minutes in the future, and a body limit of 256 KiB. A validation error stops HTTP synchronization without modifying the original READY record. Repeated identical measurementId values produce duplicates; different data produces 409 with batch rollback. UNDATABLE and GAP are never substituted with fictitious API measurements.
+
+## 12. Open prototype questions
+
+- Flash partition capacity, measurement frequency, autonomous history duration, wear, the specific crash-consistent ring implementation and recovery tests.
+- Security: pairing/bonding, encryption, permission to read history/change the clock/perform a factory reset; UUID/CRC/digest do not prove authenticity. Until this is resolved, the prototype is not considered protected against an unrelated central.
+- Acceptable UTC uncertainty, detection of an incorrect phone clock and drift; READY must not be retroactively corrected to pass server validation.
+- UI and retention period for UNDATABLE/loss markers; future compatibility with two-year local retention without invented calendar timestamps.
+- Multiple phones, device ownership and recovery from the backend are not yet defined; v1 permits one central, and ACK does not imply a server copy.
+
+Sources for platform constraints (the formats above are a custom protocol):
 
 - [ESP-IDF: BLE connection / ATT MTU](https://docs.espressif.com/projects/esp-idf/en/release-v5.4/esp32c3/api-guides/ble/get-started/ble-connection.html)
-- [ESP32-C3: system time, потеря RTC при power-on reset](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/system_time.html)
+- [ESP32-C3: system time, RTC loss on power-on reset](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/system_time.html)
 - [ESP-IDF: storage APIs](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/storage/index.html)
