@@ -1,16 +1,20 @@
-# Lüftlotse – Schulprojekt
+# Lüftlotse – L&G Projekt
 
 Lüftlotse zeigt die aktuelle CO₂-Konzentration eines verbundenen Sensors und
 stellt gespeicherte Messungen aus PostgreSQL in einem getrennten Serververlauf
-dar. Die aktuelle Sensorvorschau wird nicht in der Datenbank gespeichert.
+dar. Empfangene gültige `LIVE_SAMPLE` werden im Browser lokal in IndexedDB
+gespeichert und automatisch über die C# API nach PostgreSQL übertragen.
 
 ## Lernumfang
 
 Das Projekt verbindet Angular und TypeScript im Browser mit einer HTTP-API auf
 Basis von ASP.NET Core und C#. EF Core bildet die Messungen ab und greift über
 den PostgreSQL-Provider auf PostgreSQL zu. Das Modell hat eine einzelne
-Measurement-Entität; die aktuelle Sensoranzeige und die serverseitige Historie
-sind getrennte Datenwege.
+Measurement-Entität. Die aktuelle Anzeige nutzt neue Sensorwerte; der
+Serververlauf liest die bereits übertragenen Messungen getrennt über HTTP.
+`MeasuredAt` ist beim Browserpfad die Zeit des Empfangs im Browser, nicht eine
+vom Sensor ermittelte Messzeit. Ohne Verbindung verpasste Messungen werden
+nicht nachträglich wiederhergestellt. Android ist von dieser Änderung nicht betroffen.
 
 - [Domänenmodell](domain-model.md) und [UML-Diagramm](domain-model.puml)
 - [Architektur](architecture.md) und [Architekturdiagramm](architecture.puml)
@@ -102,12 +106,20 @@ unterstützen; die Anwendung braucht dafür `localhost` oder HTTPS.
 1. Die Anwendung in Chrome unter `http://localhost:4200/` öffnen und
    **Sensor auswählen** anklicken. Im Chrome-Gerätedialog den Lüftlotse-Sensor
    auswählen. Nach Verbindung und einem neuen gültigen Messwert erscheint das
-   aktuelle CO₂ in der Anzeige. Dieser Wert wird nicht gespeichert.
-2. **Serververlauf** öffnen, einen Zeitraum einstellen und **Laden** anklicken.
-   Die Tabelle zeigt die in PostgreSQL vorhandenen Messungen.
+   aktuelle CO₂ in der Anzeige. Der empfangene Wert wird lokal als `sensor`
+   gespeichert und automatisch an die Batch-API gesendet. Bei einem API-Ausfall
+   bleibt er lokal ausstehend und wird später erneut gesendet.
+2. Nach erfolgreicher Übertragung **Serververlauf** öffnen, einen Zeitraum um
+   den aktuellen Empfangszeitpunkt einstellen und **Laden** anklicken.
+   Die Tabelle zeigt die realen Sensormessungen aus PostgreSQL mit **Quelle=sensor**.
+   Die Zeit entspricht dem Empfang im Browser (`MeasuredAt`).
 3. Den Zeitraum ändern und erneut **Laden** wählen, um die Periodenfilterung zu
    zeigen. Weitere Ergebnisse lassen sich bei vorhandener Folgeseite mit
    **Weitere laden** abrufen.
+4. Für die separate Duplikatprüfung die unveränderte `demo-measurements.json`
+   erneut senden. Nach dem ersten erfolgreichen Import meldet die API
+   `received=10`, `inserted=0`, `duplicates=10`. Diese Demodaten bleiben als
+   `simulator` gekennzeichnet; sie sind keine realen Sensormessungen.
 
 Ohne ESP32 bleibt die aktuelle CO₂-Anzeige leer beziehungsweise zeigt bei
 fehlendem Sensor **Sensor nicht verfügbar**. Der Serververlauf ist davon

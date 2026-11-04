@@ -17,10 +17,10 @@ package "Backend" {
 database "PostgreSQL\nTabelle measurements" as PostgreSQL
 node "ESP32\nCO₂-Sensor" as ESP32
 
-Angular --> API : HTTP / JSON\nGET /api/measurements\nPOST /api/measurements/batch
+Angular --> API : HTTP / JSON\nGET /api/measurements\nautomatisch POST /api/measurements/batch
 API --> EF : Datenzugriff
 EF --> PostgreSQL : SQL
-Angular --> LocalDB : lokale Historie lesen / verwalten\nSync-Status aktualisieren
+Angular --> LocalDB : LIVE_SAMPLE als sensor speichern\npending / synced verwalten
 Angular --> Bluetooth : Gerät auswählen / GATT verbinden
 Bluetooth --> ESP32 : BLE / GATT
 ESP32 ..> Angular : LIVE_SAMPLE über Web Bluetooth\naktueller CO₂-Wert
@@ -28,14 +28,17 @@ ESP32 ..> Angular : LIVE_SAMPLE über Web Bluetooth\naktueller CO₂-Wert
 note bottom of Angular
   Serververlauf: GET-Antworten nur im Arbeitsspeicher,
   keine Übernahme in die lokale IndexedDB-Historie.
-  Manuelle Synchronisierung: gespeicherte lokale
-  Messungen über POST an die API senden.
+  Empfangene LIVE_SAMPLE lokal speichern und
+  automatisch über POST an die C# API senden.
+  API-Ausfall: pending behalten, Versand wiederholen.
 end note
 
 note bottom of Bluetooth
-  LIVE_SAMPLE dient ausschließlich der aktuellen Anzeige.
-  Dieser Pfad schreibt weder in IndexedDB noch über
-  die HTTP API nach PostgreSQL.
+  LIVE_SAMPLE: Anzeige und lokale Speicherung.
+  MeasuredAt = Empfangszeit im Browser.
+  Ohne Verbindung verpasste Messungen werden
+  nicht nachträglich wiederhergestellt.
+  Android ist von dieser Änderung nicht betroffen.
 end note
 
 note bottom of LocalDB
