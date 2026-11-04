@@ -12,6 +12,9 @@ im Backend (`ReceivedAt`). Die Typen im Diagramm entsprechen den C#-Eigenschafte
 Alle Eigenschaften besitzen öffentliche Getter und Init-Setter; `Source` und
 `Segment` sind zusätzlich als `required` deklariert.
 
+Für im Browser empfangene `LIVE_SAMPLE` bezeichnet `MeasuredAt` die Zeit des
+Empfangs im Browser, nicht die Messzeit oder UTC-Zeit des Sensors.
+
 EF Core bildet die Entität auf die Tabelle `measurements` ab.
 `MeasurementId` ist der Primärschlüssel. Die Datenbank begrenzt `Source` auf
 `simulator` oder `sensor`, `Ppm` auf 1–100000 und `Segment` auf eine nicht leere

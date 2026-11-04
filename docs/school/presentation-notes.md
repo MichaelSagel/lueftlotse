@@ -48,7 +48,7 @@ Diagramme: [Domänenmodell](domain-model.puml),
 
 ### 3:00–4:00 · Aktueller CO₂-Wert
 
-- In Chrome **Sensor auswählen** anklicken und den Lüftlotse-Sensor wählen. [Anwendung in Chrome öffnen](http://localhost:4200/), **Sensor auswählen**
+- [Anwendung in Chrome öffnen](http://localhost:4200/), **Sensor auswählen**
   anklicken und den Lüftlotse-Sensor wählen.
 - Nach Verbindung auf einen neuen Messwert warten; Wert und ppm-Schwelle zeigen.
 - ppm bedeutet Teile pro Million. 1000 ppm CO₂ entsprechen 0,1 Prozent der Luft.
@@ -77,7 +77,9 @@ Diagramme: [Domänenmodell](domain-model.puml),
 - [PowerShell-Befehl im Schul-README zeigen](README.md).
 - Bereits vorhandene Demodaten erneut senden.
 - Für diese separate Prüfung den Zeitraum 15.01.2026 11:00 bis 11:10
-  (Europe/Berlin; Ende exklusiv) verwenden. Die Demodaten haben **Quelle=simulator**.
+  (Europe/Berlin; Ende exklusiv) verwenden. Die Demodaten enthalten das Feld
+  `source=simulator`; es bleibt in Daten und API erhalten, wird aber nicht in der
+  Browser-Tabelle angezeigt.
 - Die API-Antwort zeigen: `received=10`, `inserted=0`, `duplicates=10`.
 - Serververlauf neu laden: Es bleiben dieselben zehn Datensätze, ohne zusätzliche
   Zeilen.

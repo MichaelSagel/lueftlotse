@@ -16,17 +16,16 @@
   </g>
   <g fill="black" font-family="Arial, sans-serif" font-size="16">
     <text x="450" y="35" text-anchor="middle" font-weight="bold">Browser: eine Spalte auf Mobil und Desktop</text>
-    <text x="310" y="110" font-size="26" font-weight="bold">Lüftlotse</text>
-    <text x="310" y="135" font-size="13">RAUMLUFT IM BLICK</text>
+    <text x="310" y="95" font-size="13">RAUMLUFT IM BLICK</text>
+    <text x="310" y="135" font-size="26" font-weight="bold">Lüftlotse</text>
     <text x="450" y="190" text-anchor="middle">CO₂-Konzentration</text>
     <text x="450" y="250" text-anchor="middle" font-size="44">—</text>
     <text x="450" y="280" text-anchor="middle">ppm</text>
-    <text x="450" y="320" text-anchor="middle">Noch keine Messung</text>
-    <text x="310" y="373" font-size="13">Sensor nicht verfügbar</text>
+    <text x="450" y="310" text-anchor="middle">Sensor nicht verfügbar</text>
+    <text x="450" y="330" text-anchor="middle" font-size="11">Sensor nicht verfügbar · Kein Gerät verbunden.</text>
     <text x="450" y="487" text-anchor="middle">Sensor auswählen</text>
-    <text x="320" y="730" font-weight="bold">Serververlauf</text>
     <text x="330" y="770" font-size="13">Von: Datum / Uhrzeit</text>
-    <text x="330" y="825" font-size="13">Bis (ausschließlich): Datum / Uhrzeit</text>
+    <text x="330" y="825" font-size="13">Bis: Datum / Uhrzeit</text>
     <text x="450" y="877" text-anchor="middle">Verlauf anzeigen</text>
     <text x="385" y="947" text-anchor="middle" font-size="13">Zeit ↓ / …</text><text x="515" y="947" text-anchor="middle" font-size="13">CO₂ (ppm) / …</text>
     <text x="450" y="1004" text-anchor="middle">Weitere laden</text>

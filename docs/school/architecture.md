@@ -6,7 +6,12 @@ kommuniziert über HTTP und JSON mit der ASP.NET-Core-API in C#.
 Das Backend greift mit EF Core und dem Npgsql-Provider auf PostgreSQL zu.
 
 Der separate Bereich **Serververlauf** liest gespeicherte Messungen mit
-`GET /api/measurements`. Zeitraum und Cursor begrenzen die Abfrage. Die Ergebnisse
+`GET /api/measurements`. Zeitraum und Cursor begrenzen die Abfrage. Zeit und
+CO₂-Wert lassen sich serverseitig auf- oder absteigend über den gesamten
+gewählten Zeitraum sortieren; standardmäßig stehen neue Messungen oben.
+Der Cursor ist an Filter und Sortierung gebunden. Ein Sortierwechsel verwirft
+ihn und lädt die erste Seite neu; gleiche Werte erhalten eine stabile Reihenfolge.
+Die Ergebnisse
 bleiben im Arbeitsspeicher der Oberfläche und werden nicht in die lokale Historie
 übernommen. Empfangene gültige Browser-`LIVE_SAMPLE` werden lokal als `sensor`
 mit ausstehendem Synchronisierungsstatus gespeichert und automatisch über
