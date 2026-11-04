@@ -290,7 +290,7 @@ export class BleConnection implements BleSession {
         if (session.uptimeMs !== undefined && message.uptimeMs < session.uptimeMs) return;
         session.sampleCounter = message.sampleCounter; session.uptimeMs = message.uptimeMs;
         this.preview.next({ kind: 'sample', sample: message });
-        return; // Never forward preview to journal listeners or persistence.
+        return; // Never forward LIVE_SAMPLE to journal listeners.
       }
       const request = 'requestId' in message ? session.requests.get(message.requestId) : undefined;
       if (message.type === 0x80 && (message.requestId === 65535 || request?.types.includes(0x80))) {

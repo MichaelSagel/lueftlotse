@@ -1,0 +1,9 @@
+# Browser LIVE_SAMPLE persistence
+
+Only BrowserBleSession saves validated LIVE_SAMPLE notifications. DeviceId comes from the connected Info characteristic. MeasuredAt is the browser wall-clock time (Date.now()) when the complete, valid notification is received, captured before asynchronous storage. It is not sensor UTC, uptime, or an estimate of sampling time; browser clock errors are therefore preserved.
+
+A separate IndexedDB transaction saves the sensor row with syncStatus=pending and a random MeasurementId, together with the durable (deviceId, bootId, sampleCounter) identity. A replay, including after reconnect or browser reload, keeps the original ID, time and payload. uint64 counters/uptime remain bigint in the protocol and decimal strings in storage. The boot UUID is used as the batch segment. Identity receipts survive retention pruning. Schema v7 adds browserLiveSamples without rewriting existing history or indexes. Opening an existing v7 database preserves that store; upgrading v6 creates it. Deduplication checks both browserLiveSamples and the legacy namespaced metadata keys. New receipts are written atomically to both stores. Clearing history clears browserLiveSamples while retaining the metadata receipts.
+
+After local commit, the existing POST /measurements/batch sender uploads pending sensor rows. A 30-second retry timer also handles offline recovery and rows received while another upload is running. Automatic upload does not migrate or send simulator rows. Automatic and manual senders share a storage-scoped exclusion guard; HTTP retries read the original committed rows. Only a valid successful acknowledgement marks rows synced. API errors leave rows pending. Browser tab suspension can delay retries.
+
+No journal download, server history download or gap recovery is performed. Android and firmware paths are unchanged.

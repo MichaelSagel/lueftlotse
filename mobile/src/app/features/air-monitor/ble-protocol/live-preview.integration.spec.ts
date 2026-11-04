@@ -33,7 +33,7 @@ describe('Shared BLE session and volatile Sensor UI', () => {
   let adapter: BleAdapter;
   let request: ReturnType<typeof vi.fn<typeof fetch>>;
   const emit = (message: Message) => fragmentMessage(message, eventId++, 'events').forEach(frame => receive(view(frame)));
-  const sample = (counter: bigint, ppm = 950): LiveSample => ({ type: 0x8a, bootId: uuid, sampleCounter: counter, uptimeMs: counter * 5000n, ppm });
+  const sample = (counter: bigint, ppm = 950): LiveSample => ({ type: 0x8a, bootId: uuid, sampleCounter: counter, uptimeMs: counter, ppm });
   beforeEach(() => {
     vi.stubGlobal('indexedDB', new IDBFactory()); vi.stubGlobal('IDBKeyRange', IDBKeyRange);
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
@@ -60,7 +60,7 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     connection = TestBed.inject(BleConnection); storage = TestBed.inject(Co2Storage); history = TestBed.inject(Co2History);
   });
   afterEach(async () => {
-    await connection.disconnect(); await history.whenSettled(); TestBed.resetTestingModule(); await storage.close();
+    await connection.disconnect(); await TestBed.inject(BrowserBleSession).whenSettled(); await history.whenSettled(); TestBed.resetTestingModule(); await storage.close();
     vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
 
@@ -80,7 +80,7 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     fixture.destroy();
   });
 
-  it('shows only fresh Sensor data, preserves existing history and never persists or uploads preview', async () => {
+  it('shows only fresh Sensor data, preserves simulator history and saves/uploads sensor samples separately', async () => {
     await history.whenSettled();
     await storage.append({ time: Date.now() - 1000, ppm: 650, segment: 'existing-history' });
     await history.imported();
@@ -107,14 +107,12 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     expect(el.querySelector('.status')?.textContent).toContain('Hoher CO₂-Wert');
     expect(el.querySelector('.hint')?.textContent).toContain('Bitte lüften');
     await vi.advanceTimersByTimeAsync(2000); await history.whenSettled(); await history.refresh();
-    expect(append).not.toHaveBeenCalled(); expect(await storage.count()).toBe(1); expect(history.measurements()).toHaveLength(1);
-    expect(request).not.toHaveBeenCalled(); await TestBed.inject(Co2Sync).synchronize();
-    expect(request).toHaveBeenCalledOnce();
-    const body = JSON.parse(request.mock.calls[0][1]!.body as string);
-    expect(body.source).toBe('simulator'); expect(body.measurements).toHaveLength(1);
-    emit(sample(4n)); await TestBed.inject(Co2Sync).synchronize(); expect(request).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(10000); await history.whenSettled();
-    expect(await storage.count()).toBe(1); expect(source.state().status).toBe('stopped');
+    await vi.waitFor(async () => expect((await storage.syncSnapshot()).synced).toBe(3));
+    expect(append).not.toHaveBeenCalled(); expect(await storage.count()).toBe(4);
+    const bodies = request.mock.calls.map(call => JSON.parse(call[1]!.body as string));
+    expect(bodies.every(body => body.source === 'sensor' && body.deviceId === uuid)).toBe(true);
+    expect(bodies.flatMap(body => body.measurements)).toHaveLength(3);
+    expect((await storage.syncSnapshot()).pending).toBe(1);
     expect(append).not.toHaveBeenCalled(); fixture.destroy();
   });
 
@@ -153,6 +151,43 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     fragmentMessage(sample(99n, 2222), 1, 'events').forEach(frame => oldReceive(view(frame))); oldLost();
     emit(sample(1n, 800)); fixture.detectChanges();
     expect(connection.state()).toBe('ready'); expect(el.querySelector('.measurement strong')?.textContent).toBe('800');
-    expect(await storage.count()).toBe(0); fixture.destroy();
+    await vi.waitFor(async () => expect(await storage.count()).toBe(2)); fixture.destroy();
   });
+  it('preserves ID, data and receipt time across duplicates, reconnect and API failure/retry', async () => {
+    await history.whenSettled(); request.mockRejectedValue(new Error('offline'));
+    await connection.connect('sensor');
+    const receivedAt = Date.now(); const counter = 9007199254740993n;
+    emit(sample(counter));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(TestBed.inject(Co2Sync).running()).toBe(false));
+    const first = JSON.parse(request.mock.calls[0][1]!.body as string);
+    expect(first).toMatchObject({ deviceId: uuid, source: 'sensor' });
+    expect(first.measurements[0]).toMatchObject({ measuredAt: new Date(receivedAt).toISOString(), ppm: 950, segment: uuid });
+    expect((await storage.syncSnapshot()).pending).toBe(1);
+    await connection.disconnect(); await connection.connect('sensor'); emit(sample(counter, 999));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(TestBed.inject(Co2Sync).running()).toBe(false));
+    expect(JSON.parse(request.mock.calls[1][1]!.body as string)).toEqual(first);
+    await Promise.all([storage.saveLiveSample(uuid, sample(counter), receivedAt + 1000), storage.saveLiveSample(uuid, sample(counter), receivedAt + 2000)]);
+    expect(await storage.count()).toBe(1);
+    request.mockImplementation(async () => new Response(JSON.stringify({ received: 1, inserted: 0, duplicates: 1 }), { status: 200 }));
+    await TestBed.inject(Co2Sync).synchronize(true);
+    expect(JSON.parse(request.mock.calls[2][1]!.body as string)).toEqual(first);
+    expect(await storage.syncSnapshot()).toMatchObject({ pending: 0, synced: 1 });
+  });
+
+  it('serializes automatic and manual HTTP and retries arrivals during a request', async () => {
+    await history.whenSettled(); let finish!: (value: Response) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await connection.connect('sensor'); emit(sample(1n));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce()); emit(sample(2n));
+    await vi.waitFor(async () => expect(await storage.count()).toBe(2));
+    await TestBed.inject(Co2Sync).synchronize(); expect(request).toHaveBeenCalledOnce();
+    finish(new Response(JSON.stringify({ received: 1, inserted: 1, duplicates: 0 }), { status: 200 }));
+    await vi.waitFor(() => expect(TestBed.inject(Co2Sync).running()).toBe(false));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(async () => expect((await storage.syncSnapshot()).synced).toBe(2));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
 });

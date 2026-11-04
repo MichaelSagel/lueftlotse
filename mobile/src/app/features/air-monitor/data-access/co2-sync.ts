@@ -5,6 +5,8 @@ import { MEASUREMENT_API_CONFIG } from './measurement-api.config';
 
 class ServerError extends Error { constructor(readonly status: number) { super('Batch rejected'); } }
 
+const activeStorage = new WeakSet<Co2Storage>();
+
 @Injectable()
 export class Co2Sync {
   private readonly storage = inject(Co2Storage);
@@ -12,6 +14,7 @@ export class Co2Sync {
   readonly endpoint = this.apiEndpoint();
   readonly running = signal(false);
   readonly counts = signal({ pending: 0, synced: 0 });
+  readonly countsAvailable = signal(false);
   readonly total = signal(0);
   readonly completed = signal(0);
   readonly result = signal<string | null>(null);
@@ -23,24 +26,28 @@ export class Co2Sync {
 
   async refreshCounts(): Promise<void> {
     try { await this.readCounts(); }
-    catch { this.error.set('Der lokale Synchronisierungsstand konnte nicht geladen werden.'); }
+    catch (error) {
+      this.countsAvailable.set(false);
+      this.error.set(`Lokaler Synchronisierungsstand nicht verfügbar: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   private async readCounts(): Promise<SyncSnapshot> {
     const revision = ++this.countsRequest;
     const snapshot = await this.storage.syncSnapshot();
-    if (revision === this.countsRequest) this.counts.set({ pending: snapshot.pending, synced: snapshot.synced });
+    if (revision === this.countsRequest) { this.counts.set({ pending: snapshot.pending, synced: snapshot.synced }); this.countsAvailable.set(true); }
     return snapshot;
   }
 
-  async synchronize(): Promise<void> {
-    if (this.running()) return;
+  async synchronize(sensorOnly = false): Promise<void> {
+    if (this.running() || activeStorage.has(this.storage)) return;
     if (!this.endpoint) { this.error.set('FÃ¼r diese App ist noch kein Server eingerichtet.'); return; }
+    activeStorage.add(this.storage);
     this.running.set(true);
     this.error.set(null); this.result.set(null); this.completed.set(0); this.total.set(0);
     const controller = new AbortController();
     this.controller = controller;
     try {
-      await this.storage.migrateMetadata();
+      if (!sensorOnly) await this.storage.migrateMetadata();
       const snapshot = await this.readCounts();
       this.total.set(snapshot.pending);
       let afterKey = 0;
@@ -50,6 +57,7 @@ export class Co2Sync {
         if (!page.length) break;
         const groups = new Map<string, PendingMeasurement[]>();
         for (const entry of page) {
+          if (sensorOnly && entry.measurement.source !== 'sensor') continue;
           const key = `${entry.measurement.deviceId}:${entry.measurement.source}`;
           const group = groups.get(key) ?? [];
           group.push(entry); groups.set(key, group);
@@ -95,6 +103,7 @@ export class Co2Sync {
     } finally {
       this.controller = undefined;
       await this.refreshCounts();
+      activeStorage.delete(this.storage);
       this.running.set(false);
     }
   }

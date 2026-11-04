@@ -8,7 +8,9 @@ import { Co2Storage } from '../../data-access/co2-storage';
   template: `
     <button type="button" (click)="expanded.set(!expanded())" [attr.aria-expanded]="expanded()" aria-controls="measurement-sync">Synchronisierung</button>
     <section id="measurement-sync" [hidden]="!expanded()" aria-label="Messwerte synchronisieren">
+      @if (sync.countsAvailable()) {
       <p>Ausstehend (pending): {{ sync.counts().pending }} · Synchronisiert (synced): {{ sync.counts().synced }}</p>
+      }
       @if (!sync.endpoint) {
         <p>Server noch nicht eingerichtet. Für die Android-App wird eine eigene Serveradresse benötigt; localhost verweist auf das Telefon.</p>
       }

@@ -1,4 +1,7 @@
-﻿import { Injectable } from '@angular/core';
+﻿import { decodeBody, encodeBody } from '../ble-protocol/codec';
+import { uuidBytes } from '../ble-protocol/binary';
+import type { LiveSample } from './ble-session';
+import { Injectable } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
 import { HistoryContinuity } from '../domain/history-continuity';
 import { signal } from '@angular/core';
@@ -45,7 +48,7 @@ export class Co2Storage {
   private open(): Promise<IDBDatabase> {
     if (!this.database) {
       this.database = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('lueftlotse', 6);
+        const request = indexedDB.open('lueftlotse', 7);
         let blocked = false;
         request.onupgradeneeded = event => {
           if (event.oldVersion < 1) {
@@ -68,6 +71,7 @@ export class Co2Storage {
             request.transaction!.objectStore('measurements').createIndex('deviceSequence', ['deviceId', 'source', 'sequence']);
             request.transaction!.objectStore('bleGaps').createIndex('deviceId', 'deviceId');
           }
+          if (event.oldVersion < 7) request.result.createObjectStore('browserLiveSamples');
         };
         request.onsuccess = () => {
           if (blocked) { request.result.close(); return; }
@@ -256,6 +260,40 @@ export class Co2Storage {
         };
         request = transaction.objectStore('measurements').add(measurement);
       });
+    });
+  }
+  /** Browser receipt time, never sensor UTC or uptime. Identity survives reconnect/reload. */
+  async saveLiveSample(deviceId: string, input: LiveSample, receivedAt: number): Promise<boolean> {
+    uuidBytes(deviceId);
+    const sample = decodeBody(0x8a, encodeBody(input)) as LiveSample;
+    if (!Number.isFinite(receivedAt) || !Number.isFinite(new Date(receivedAt).getTime())) throw new RangeError('Invalid receipt time');
+    const id = deviceId.toLowerCase();
+    const identity = [id, sample.bootId, sample.sampleCounter.toString()];
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = database.transaction(['measurements', 'metadata', 'browserLiveSamples'], 'readwrite');
+      const identities = tx.objectStore('browserLiveSamples');
+      const existing = identities.get(identity);
+      const legacyIdentity = ['browserLiveSample', id, sample.bootId, sample.sampleCounter.toString()];
+      const legacy = tx.objectStore('metadata').get(legacyIdentity);
+      let inserted = false;
+      let checked = 0;
+      const continueAfterLookup = () => {
+        if (++checked !== 2 || existing.result !== undefined || legacy.result !== undefined) return;
+        const measurementId = crypto.randomUUID();
+        tx.objectStore('measurements').add({
+          measurementId, deviceId: id, source: 'sensor', syncStatus: 'pending',
+          time: receivedAt, ppm: sample.ppm, segment: sample.bootId,
+          bootId: sample.bootId, sampleCounter: sample.sampleCounter.toString(), uptimeMs: sample.uptimeMs.toString(),
+        } satisfies StoredCo2Measurement & { bootId: string; sampleCounter: string; uptimeMs: string });
+        identities.add(measurementId, identity);
+        tx.objectStore('metadata').add(measurementId, legacyIdentity);
+        inserted = true;
+      };
+      existing.onsuccess = continueAfterLookup;
+      legacy.onsuccess = continueAfterLookup;
+      tx.oncomplete = () => { if (inserted) this.changes.update(value => value + 1); resolve(inserted); };
+      tx.onabort = () => reject(tx.error ?? new Error('LIVE_SAMPLE save failed'));
     });
   }
   /** Call at startup without delaying normal history reads/writes until the whole backfill ends. */
@@ -492,8 +530,8 @@ export class Co2Storage {
       for (const listener of [...state.listeners]) listener();
       const database = await this.open();
       await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction(['measurements', 'bleCursors', ...serviceStores], 'readwrite');
-        for (const name of ['measurements', 'bleCursors', ...serviceStores]) transaction.objectStore(name).clear();
+        const transaction = database.transaction(['measurements', 'bleCursors', 'browserLiveSamples', ...serviceStores], 'readwrite');
+        for (const name of ['measurements', 'bleCursors', 'browserLiveSamples', ...serviceStores]) transaction.objectStore(name).clear();
         transaction.oncomplete = () => { this.changes.update(value => value + 1); resolve(); };
         transaction.onabort = () => reject(transaction.error ?? new Error('History clear failed'));
       });

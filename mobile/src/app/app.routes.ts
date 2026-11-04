@@ -1,3 +1,4 @@
+import { Co2Sync } from './features/air-monitor/data-access/co2-sync';
 import { BLE_ADAPTER } from './features/air-monitor/data-access/ble-adapter';
 import { BLE_SCAN_BARRIER, BLE_CONNECTION_BINDING } from './features/air-monitor/data-access/ble-connection';
 import { WebBluetoothAdapter } from './features/air-monitor/data-access/web-bluetooth-adapter';
@@ -26,7 +27,7 @@ export const routes: Routes = [
       { provide: BLE_ADAPTER, useExisting: WebBluetoothAdapter },
       { provide: BLE_SCAN_BARRIER, useFactory: () => inject(ANDROID_BLE) ? inject(BleScanner) : { stop: async () => {} } },
       { provide: BLE_CONNECTION_BINDING, useFactory: () => inject(ANDROID_BLE) ? inject(BleBindingStore) : browserBleBinding() },
-      Co2History, Co2Storage, Co2Monitor, BleScanner, NativeBleSession, NativeBleBinding, BrowserBleSession, BleJournalSync,
+      Co2Sync, Co2History, Co2Storage, Co2Monitor, BleScanner, NativeBleSession, NativeBleBinding, BrowserBleSession, BleJournalSync,
       { provide: BLE_SERVICE_BINDING_BRIDGE, useExisting: BLE_SERVICE_SESSION_BRIDGE },
       { provide: BLE_SESSION, useFactory: () => inject(ANDROID_BLE) ? inject(NativeBleSession) : inject(BrowserBleSession) },
       { provide: CO2_SOURCE, useFactory: createInactiveCo2Source }],
