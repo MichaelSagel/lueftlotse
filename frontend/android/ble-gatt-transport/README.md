@@ -129,7 +129,7 @@ cursor, binding or HTTP implementation and no generic raw-GATT/core escape hatch
 ## Validation without APK
 
 With the installed JDK 21 (`JAVA_HOME`) and Android SDK (`ANDROID_HOME`), run from
-`mobile/android`; all dependencies must already be cached:
+`frontend/android`; all dependencies must already be cached:
 
 ```powershell
 ./gradlew.bat :ble-protocol-core:test :ble-gatt-transport:testDebugUnitTest :ble-gatt-transport:compileDebugSources :ble-gatt-transport:compileReleaseSources :app:compileDebugSources :app:compileReleaseSources '-Pandroid.builder.sdkDownload=false' --offline --no-daemon --console=plain

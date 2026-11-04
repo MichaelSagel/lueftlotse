@@ -155,13 +155,13 @@ path that excludes all binding data. This stage does not implement that feature.
 JVM tests cover empty/one-time migration, restart, interruption before/after
 replacement and read-back, corruption/read errors, revision exhaustion, identity
 mismatch, forget, pending/stale STATUS, save-before-close ordering, storage failure
-cleanup and manifest backup exclusions. Mobile tests use real fake-indexeddb
+cleanup and manifest backup exclusions. Frontend tests use real fake-indexeddb
 transactions and a fake bridge to test fencing, native acknowledgement before
 deletion, every retry boundary, empty state, forget and reading through the bridge.
-The full mobile suite also checks that the existing BLE/session/journal path works.
+The full frontend suite also checks that the existing BLE/session/journal path works.
 
-Run `npm.cmd test -- --watch=false` in `mobile`. With the installed JDK 21 and SDK,
-run in `mobile/android`:
+Run `npm.cmd test -- --watch=false` in `frontend`. With the installed JDK 21 and SDK,
+run in `frontend/android`:
 
 ```powershell
 ./gradlew.bat :ble-protocol-core:test :ble-gatt-transport:testDebugUnitTest :app:testDebugUnitTest :app:compileDebugSources :app:compileReleaseSources '-Pandroid.builder.sdkDownload=false' --offline --no-daemon --console=plain

@@ -91,13 +91,13 @@ continues to persist disabled intent before close.
 
 JVM tests drive the real core through a fake transport: single ownership, early
 responses, BEGIN/ENTRY/END, full uint64, commit gating, wrong metadata, one-use
-tokens, client expiry, stale generations and lost ACK_ACCEPTED. Mobile tests use
+tokens, client expiry, stale generations and lost ACK_ACCEPTED. Frontend tests use
 the real BatchReceiver and fake-indexeddb transactions, and also run the existing
 BleJournalSync over the selected adapter. They cover shared platform DI, migration
 failure/retry, scan-stop ordering, revocation during commit, late acquisition/events,
 heartbeat loss, original preview age on resume and preview non-persistence.
 
-Run the full mobile tests and production build, then the JVM/Android compile
+Run the full frontend tests and production build, then the JVM/Android compile
 command in [BLE_SERVICE.md](BLE_SERVICE.md#verification-and-limits). These commands
 do not package an APK. Actual WebView destruction, screen lock, radio loss and
 on-device transfer still require a later authorized device test. Automatic

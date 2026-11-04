@@ -147,7 +147,7 @@ from that durable cursor; this core never rolls back data or owns the cursor.
 ## JVM tests and Android compilation without APK
 
 Set the existing JDK 21 as `JAVA_HOME`. The standalone JVM run needs no Android
-SDK, emulator, GATT or phone. From `mobile/android`:
+SDK, emulator, GATT or phone. From `frontend/android`:
 
 ```powershell
 ./gradlew.bat -p ble-protocol-core test --no-daemon --console=plain
@@ -177,4 +177,4 @@ not a device/foreground-service integration test.
 
 Successful CRC, protocol reception and JVM tests do not establish SCD41 accuracy.
 The prototype's isopropanol exposure limitation remains in the existing
-[mobile documentation](../../README.md#simulator-tests-and-prototype-accuracy).
+[frontend documentation](../../README.md#simulator-tests-and-prototype-accuracy).

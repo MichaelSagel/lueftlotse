@@ -9,8 +9,8 @@ if (!['release', 'usb-debug'].includes(mode)) throw Error('Expected release or u
 const run = (file, args) => execFileSync(process.execPath, [file, ...args], { stdio: 'inherit' });
 const ng = 'node_modules/@angular/cli/bin/ng.js';
 run(ng, ['build', '--configuration', 'production']);
-writeFileSync('dist/mobile/browser/build-profile.json', JSON.stringify({ profile: 'release' }));
-verifyAssets('dist/mobile/browser', 'release');
+writeFileSync('dist/frontend/browser/build-profile.json', JSON.stringify({ profile: 'release' }));
+verifyAssets('dist/frontend/browser', 'release');
 run('node_modules/@capacitor/cli/bin/capacitor', ['sync', 'android']);
 verifyAssets('android/app/src/main/assets/public', 'release');
 if (mode === 'usb-debug') {

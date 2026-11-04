@@ -44,8 +44,8 @@ This builds the SAME component source for rv32im and runs a freestanding test
 ELF under QEMU virt (not ESP32 emulation). Output and ELF stay in ignored build/.
 No downloads. The test harness UART/exit addresses belong ONLY to QEMU virt.
 A 15-second process timeout detects hangs. Info and GET_STATUS vectors match
-mobile codec.spec.ts/fragments.spec.ts; STATUS frame vectors are also pinned
-in mobile fragments.spec.ts. Tests cover CRC corruption, incomplete sequences,
+frontend codec.spec.ts/fragments.spec.ts; STATUS frame vectors are also pinned
+in frontend fragments.spec.ts. Tests cover CRC corruption, incomplete sequences,
 duplicates, deadlines, flags/bounds, UUID/version checks, uint64 max and ID
 exhaustion. Firmware compilation separately checks ESP32-C3 toolchain compatibility.
 

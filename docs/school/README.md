@@ -37,11 +37,11 @@ der Migration auf eine lokale Datenbank ist ein separater Einrichtungsschritt.
 ## Erster Start
 
 Die folgenden Befehle werden vom Stammverzeichnis des Repositorys ausgeführt.
-Zuerst werden die durch `mobile/package-lock.json` festgelegten npm-Pakete und
+Zuerst werden die durch `frontend/package-lock.json` festgelegten npm-Pakete und
 die .NET-Abhängigkeiten wiederhergestellt:
 
 ```text
-npm --prefix mobile ci
+npm --prefix frontend ci
 dotnet restore backend/Lueftlotse.slnx
 ```
 
@@ -93,7 +93,7 @@ dotnet run --project backend/src/Lueftlotse.Api
 ```
 
 ```text
-npm --prefix mobile start
+npm --prefix frontend start
 ```
 
 Das Angular-Entwicklungssetup stellt die Anwendung unter

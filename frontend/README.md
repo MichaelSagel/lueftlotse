@@ -1,4 +1,4 @@
-# Mobile
+# Frontend
 
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.2.
 
@@ -173,7 +173,7 @@ our SCD41. Its measurement accuracy is unconfirmed; receiving data with valid CR
 does not establish accuracy. This limitation remains documented here, without a
 Prototyp-Warnung on the main screen. It is not a BLE protocol property.
 
-Run the complete web checks from `mobile/` (no APK preparation):
+Run the complete web checks from `frontend/` (no APK preparation):
 
 ```text
 npm test -- --watch=false
@@ -253,7 +253,7 @@ From the repository root, start the local API and Angular in separate terminals:
 
 ```text
 dotnet run --project backend/src/Lueftlotse.Api
-npm --prefix mobile start
+npm --prefix frontend start
 ```
 
 The Angular development proxy forwards `/api/**` to `http://127.0.0.1:5045`.
@@ -287,8 +287,8 @@ phone and approve this computer.
 From the repository root:
 
 ```text
-npm --prefix mobile run android:prepare:usb-debug
-cd mobile/android
+npm --prefix frontend run android:prepare:usb-debug
+cd frontend/android
 cmd.exe /d /c "gradlew.bat assembleDebug -Pandroid.builder.sdkDownload=false --no-daemon --console=plain"
 ```
 
@@ -307,8 +307,8 @@ server, LAN exposure and CORS changes are unnecessary. Disconnecting USB can
 lose a response: pending measurements keep their IDs and can be retried manually.
 Remove forwarding with `adb -s <serial> reverse --remove tcp:5045`.
 
-For release preparation use `npm --prefix mobile run android:prepare:release`,
-then `assembleRelease` from `mobile/android` with the same Gradle flags.
+For release preparation use `npm --prefix frontend run android:prepare:release`,
+then `assembleRelease` from `frontend/android` with the same Gradle flags.
 Production assets always have no native API configured. USB assets are placed
 only in the Android debug source set, along with the HTTP permission restricted
 to `127.0.0.1`. Gradle checks web profile markers and the USB address before
@@ -320,8 +320,8 @@ After building both APK variants, check the actual archives and manifests from
 the repository root (requires `ANDROID_HOME` and Build-Tools 36.0.0):
 
 ```powershell
-& ./mobile/scripts/verify-android-apks.ps1
-node --test mobile/scripts/verify-android-assets.test.mjs
+& ./frontend/scripts/verify-android-apks.ps1
+node --test frontend/scripts/verify-android-assets.test.mjs
 ```
 
 

@@ -1,6 +1,6 @@
 # First run: ESP32-C3 Super Mini
 
-You need ESP-IDF **6.1** installed through EIM, a USB-C data cable and the Lüftlotse Android application. These instructions are for Windows; run the commands from the **root of the lueftlotse repository**, not from mobile or firmware.
+You need ESP-IDF **6.1** installed through EIM, a USB-C data cable and the Lüftlotse Android application. These instructions are for Windows; run the commands from the **root of the lueftlotse repository**, not from frontend or firmware.
 
 ## 1. Environment and build
 

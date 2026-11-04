@@ -153,7 +153,7 @@ IndexedDB, file, history or backend write.
 
 ## Verification and limits
 
-From `mobile/android`, with the existing JAVA_HOME (JDK 21) and ANDROID_HOME:
+From `frontend/android`, with the existing JAVA_HOME (JDK 21) and ANDROID_HOME:
 
 ```powershell
 ./gradlew.bat :ble-protocol-core:test :ble-gatt-transport:testDebugUnitTest :app:testDebugUnitTest :ble-gatt-transport:compileDebugSources :ble-gatt-transport:compileReleaseSources :app:compileDebugSources :app:compileReleaseSources '-Pandroid.builder.sdkDownload=false' --offline --no-daemon --console=plain
@@ -176,5 +176,5 @@ kill, OEM power management or radio loss. There is no wake lock or restart loop.
 
 Successful reception does not establish measurement accuracy. The SCD41 in this
 prototype previously had isopropanol on its membrane; its accuracy remains
-unverified, as described in the [mobile documentation](../README.md#simulator-tests-and-prototype-accuracy).
+unverified, as described in the [frontend documentation](../README.md#simulator-tests-and-prototype-accuracy).
 This is a limitation of our sensor, not of LIVE_SAMPLE or the BLE protocol.

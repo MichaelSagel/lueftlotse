@@ -6,7 +6,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "mobile": {
+    "frontend": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -73,10 +73,10 @@
           },
           "configurations": {
             "production": {
-              "buildTarget": "mobile:build:production"
+              "buildTarget": "frontend:build:production"
             },
             "development": {
-              "buildTarget": "mobile:build:development"
+              "buildTarget": "frontend:build:development"
             }
           },
           "defaultConfiguration": "development"

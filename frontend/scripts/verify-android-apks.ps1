@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$mobileRoot = Split-Path $PSScriptRoot -Parent
+$frontendRoot = Split-Path $PSScriptRoot -Parent
 $aapt = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0/aapt2.exe'
 foreach ($variant in @('debug', 'release')) {
     $name = if ($variant -eq 'debug') { 'app-debug.apk' } else { 'app-release-unsigned.apk' }
-    $apk = Join-Path $mobileRoot "android/app/build/outputs/apk/$variant/$name"
+    $apk = Join-Path $frontendRoot "android/app/build/outputs/apk/$variant/$name"
     $zip = [IO.Compression.ZipFile]::OpenRead($apk)
     try {
         $profileEntry = $zip.GetEntry('assets/public/build-profile.json')
