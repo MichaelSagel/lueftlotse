@@ -22,13 +22,13 @@ footer { color: #52675e; font-size: 12px; line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) { .reading { transition: none; } }
 .history-link { background: white; display: block; text-align: center; padding: 14px; margin-bottom: 24px; border: 1px solid #163e2c; border-radius: 14px; color: #163e2c; text-decoration: none; font-weight: 600; }
 .history-link:focus-visible { outline: 3px solid #17663e; outline-offset: 3px; }
-.dashboard-columns { display: grid; gap: 8px; }
+.dashboard-columns { display: grid; gap: 24px; }
 .sensor-column, .history-column { min-width: 0; }
 .history-column > * { min-width: 0; max-width: 100%; }
 footer { margin-top: 24px; }
 @media (min-width: 960px) {
-  .dashboard { max-width: 1360px; padding: 20px 16px 16px; }
-  .dashboard-columns { grid-template-columns: minmax(300px, .85fr) minmax(0, 1.4fr); gap: 32px; align-items: start; }
-  .reading { padding: 36px 24px; }
-  .measurement strong { font-size: 88px; }
+  .dashboard.android { max-width: 1360px; padding: 20px 16px 16px; }
+  .android .dashboard-columns { grid-template-columns: minmax(300px, .85fr) minmax(0, 1.4fr); gap: 32px; align-items: start; }
+  .android .reading { padding: 36px 24px; }
+  .android .measurement strong { font-size: 88px; }
 }

@@ -7,9 +7,9 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
 @Component({
   selector: 'app-device-discovery',
   template: `
+    @if (scanner.available) {
     <button type="button" (click)="toggle()" [attr.aria-expanded]="expanded()" aria-controls="ble-discovery">Sensor verbinden</button>
     <section id="ble-discovery" [hidden]="!expanded()" aria-label="Bluetooth-Geräte suchen">
-      @if (scanner.available) {
         @if (connection.bindingLoading()) { <p role="status">Gespeichertes Gerät wird geladen …</p> }
         @if (connection.binding(); as saved) {
           <div class="saved-device">
@@ -55,14 +55,16 @@ import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-syn
             </li>
           }
         </ul>
-      } @else {
-        <button type="button" (click)="chooseWeb()" [disabled]="pending() || busy() || connection.state() === 'ready'">Sensor auswählen</button>
-        <button type="button" (click)="disconnect()" [disabled]="pending()">Trennen</button>
-        <p role="status">{{ web?.message() }}</p>
-        <p role="alert">{{ web?.error() || errorText() }}</p>
-        <p>{{ phaseText() }}</p>
-      }
     </section>
+    } @else {
+        <button type="button" class="web-connection" (click)="connection.state() === 'ready' ? disconnect() : chooseWeb()"
+          [disabled]="pending() || busy()">
+          {{ connection.state() === 'ready' ? 'Trennen' : 'Sensor auswählen' }}
+        </button>
+        @if (web?.error() || errorText(); as error) {
+          <p role="alert">{{ error }}</p>
+        }
+    }
   `,
   styles: `
     :host { display: block; margin-bottom: 24px; }

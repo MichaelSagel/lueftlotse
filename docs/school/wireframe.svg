@@ -1,85 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="1080" viewBox="0 0 1320 1080" role="img" aria-labelledby="title description">
-  <title id="title">Nachträglich erstellter Wireframe · Desktop und Mobil</title>
-  <desc id="description">Ab 960 Pixeln stehen CO₂ und Status links; Sensorverbindung vor den Historien rechts. Auf dem Telefon folgen alle Bereiche vertikal. Serververlauf mit Zeitraum, Laden, Zeit, CO₂, Quelle und Weitere laden. Aufgeklappte Bereiche und Tabellenplatzhalter zeigen bestehende Funktionen.</desc>
-  <rect width="1320" height="1080" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1160" viewBox="0 0 900 1160" role="img" aria-labelledby="title description">
+  <title id="title">Browser-Wireframe: eine Spalte auf allen Bildschirmbreiten</title>
+  <desc id="description">CO2, Sensorverbindung und Serververlauf untereinander. Inhalt auf grossen Bildschirmen zentriert, maximal 440 CSS-Pixel breit. Verbindungstaste immer sichtbar; Serverfilter und Ergebnisse immer sichtbar; Tabellenzeilen sind Platzhalter.</desc>
+  <rect width="900" height="1160" fill="white"/>
   <g fill="none" stroke="black" stroke-width="2">
-    <rect x="20" y="65" width="930" height="910"/>
-    <rect x="45" y="155" width="330" height="210" rx="12"/>
-    <rect x="400" y="155" width="525" height="150" rx="8"/>
-    <rect x="420" y="200" width="485" height="40" rx="6"/>
-    <rect x="420" y="250" width="485" height="40" rx="6"/>
-    <rect x="400" y="330" width="525" height="45" rx="6"/>
-    <rect x="400" y="390" width="525" height="45" rx="6"/>
-    <rect x="400" y="450" width="525" height="365" rx="8"/>
-    <rect x="420" y="505" width="230" height="40"/>
-    <rect x="670" y="505" width="235" height="40"/>
-    <rect x="420" y="565" width="485" height="40" rx="6"/>
-    <rect x="420" y="645" width="485" height="100"/>
-    <path d="M420 680H905 M420 713H905 M640 645V745 M770 645V745"/>
-    <rect x="420" y="765" width="485" height="35" rx="6"/>
-    <rect x="980" y="65" width="320" height="980"/>
-    <rect x="1000" y="155" width="280" height="185" rx="12"/>
-    <rect x="1000" y="420" width="280" height="150" rx="8"/>
-    <rect x="1010" y="460" width="260" height="42" rx="6"/>
-    <rect x="1010" y="515" width="260" height="42" rx="6"/>
-    <rect x="1000" y="590" width="280" height="40" rx="6"/>
-    <rect x="1000" y="645" width="280" height="40" rx="6"/>
-    <rect x="1000" y="700" width="280" height="325" rx="8"/>
-    <rect x="1010" y="745" width="260" height="40"/>
-    <rect x="1010" y="800" width="260" height="40"/>
-    <rect x="1010" y="850" width="260" height="40" rx="6"/>
-    <rect x="1010" y="920" width="260" height="45"/>
-    <path d="M1130 920V965 M1200 920V965"/>
-    <rect x="1010" y="980" width="260" height="35" rx="6"/>
+    <rect x="290" y="65" width="320" height="980"/>
+    <rect x="310" y="155" width="280" height="185" rx="12"/>
+    <rect x="320" y="460" width="260" height="42" rx="6"/>
+    <rect x="310" y="700" width="280" height="325" rx="8"/>
+    <rect x="320" y="745" width="260" height="40"/>
+    <rect x="320" y="800" width="260" height="40"/>
+    <rect x="320" y="850" width="260" height="40" rx="6"/>
+    <rect x="320" y="920" width="260" height="45"/>
+    <path d="M450 920V965"/>
+    <rect x="320" y="980" width="260" height="35" rx="6"/>
   </g>
   <g fill="black" font-family="Arial, sans-serif" font-size="16">
-    <text x="20" y="35" font-weight="bold">Desktop · ab 960 px · zwei Spalten</text>
-    <text x="980" y="35" font-weight="bold">Mobil · vertikal</text>
-    <text x="45" y="110" font-size="28" font-weight="bold">Lüftlotse</text>
-    <text x="45" y="135">RAUMLUFT IM BLICK · Sensor</text>
-    <text x="210" y="190" text-anchor="middle">CO₂-Konzentration</text>
-    <text x="210" y="260" text-anchor="middle" font-size="52">—</text>
-    <text x="210" y="295" text-anchor="middle">ppm</text>
-    <text x="210" y="335" text-anchor="middle">Noch keine Messung</text>
-    <text x="45" y="395" font-size="14">Sensor nicht verfügbar · Kein Gerät verbunden.</text>
-    <text x="45" y="417" font-size="14">Nur aktuelle Vorschau · Wird nicht gespeichert.</text>
-    <text x="420" y="183" font-weight="bold">Sensor verbinden</text>
-    <text x="663" y="226" text-anchor="middle">Sensor auswählen</text>
-    <text x="663" y="276" text-anchor="middle">Trennen</text>
-    <text x="663" y="359" text-anchor="middle">Verlauf anzeigen</text>
-    <text x="663" y="419" text-anchor="middle">Synchronisierung</text>
-    <text x="420" y="480" font-weight="bold">Serververlauf</text>
-    <text x="430" y="530" font-size="13">Von (lokal): Datum / Uhrzeit</text>
-    <text x="680" y="530" font-size="13">Bis (ausschließlich): Datum / Uhrzeit</text>
-    <text x="663" y="592" text-anchor="middle">Laden</text>
-    <text x="420" y="631" font-size="14">Servermessungen · lokale Zeit</text>
-    <text x="430" y="669">Zeit</text><text x="650" y="669">CO₂ (ppm)</text><text x="780" y="669">Quelle</text>
-    <text x="430" y="702">…</text><text x="650" y="702">…</text><text x="780" y="702">…</text>
-    <text x="430" y="735">…</text><text x="650" y="735">…</text><text x="780" y="735">…</text>
-    <text x="663" y="789" text-anchor="middle">Weitere laden</text>
-    <text x="45" y="940" font-size="13">Sensorvorschau · Gespeicherte Messungen bleiben im Verlauf verfügbar.</text>
-    <text x="1000" y="110" font-size="26" font-weight="bold">Lüftlotse</text>
-    <text x="1000" y="135" font-size="13">RAUMLUFT IM BLICK · Sensor</text>
-    <text x="1140" y="190" text-anchor="middle">CO₂-Konzentration</text>
-    <text x="1140" y="250" text-anchor="middle" font-size="44">—</text>
-    <text x="1140" y="280" text-anchor="middle">ppm</text>
-    <text x="1140" y="320" text-anchor="middle">Noch keine Messung</text>
-    <text x="1000" y="373" font-size="13">Sensor nicht verfügbar</text>
-    <text x="1000" y="398" font-size="13">Nur aktuelle Vorschau · Nicht gespeichert.</text>
-    <text x="1010" y="448" font-weight="bold">Sensor verbinden</text>
-    <text x="1140" y="487" text-anchor="middle">Sensor auswählen</text>
-    <text x="1140" y="542" text-anchor="middle">Trennen</text>
-    <text x="1140" y="616" text-anchor="middle">Verlauf anzeigen</text>
-    <text x="1140" y="671" text-anchor="middle">Synchronisierung</text>
-    <text x="1010" y="730" font-weight="bold">Serververlauf</text>
-    <text x="1020" y="770" font-size="13">Von (lokale Zeit): Datum / Uhrzeit</text>
-    <text x="1020" y="825" font-size="13">Bis (ausschließlich): Datum / Uhrzeit</text>
-    <text x="1140" y="877" text-anchor="middle">Laden</text>
-    <text x="1010" y="909" font-size="13">Servermessungen · lokale Zeit</text>
-    <text x="1020" y="947" font-size="13">Zeit / …</text><text x="1138" y="947" font-size="13">CO₂ / …</text><text x="1206" y="947" font-size="13">Quelle</text>
-    <text x="1140" y="1004" text-anchor="middle">Weitere laden</text>
-    <text x="20" y="1000" font-size="14">Nachträglich erstellter Wireframe · Schwarz-Weiß · Tabellenzeilen sind Platzhalter.</text>
-    <text x="20" y="1028" font-size="14">Sensorverbindung und Serververlauf aufgeklappt; lokale Historie und Synchronisierung eingeklappt.</text>
-    <text x="20" y="1056" font-size="14">Weitere laden wird nur bei vorhandenem nextCursor angezeigt.</text>
+    <text x="450" y="35" text-anchor="middle" font-weight="bold">Browser: eine Spalte auf Mobil und Desktop</text>
+    <text x="310" y="110" font-size="26" font-weight="bold">Lüftlotse</text>
+    <text x="310" y="135" font-size="13">RAUMLUFT IM BLICK</text>
+    <text x="450" y="190" text-anchor="middle">CO₂-Konzentration</text>
+    <text x="450" y="250" text-anchor="middle" font-size="44">—</text>
+    <text x="450" y="280" text-anchor="middle">ppm</text>
+    <text x="450" y="320" text-anchor="middle">Noch keine Messung</text>
+    <text x="310" y="373" font-size="13">Sensor nicht verfügbar</text>
+    <text x="450" y="487" text-anchor="middle">Sensor auswählen</text>
+    <text x="320" y="730" font-weight="bold">Serververlauf</text>
+    <text x="330" y="770" font-size="13">Von: Datum / Uhrzeit</text>
+    <text x="330" y="825" font-size="13">Bis (ausschließlich): Datum / Uhrzeit</text>
+    <text x="450" y="877" text-anchor="middle">Verlauf anzeigen</text>
+    <text x="385" y="947" text-anchor="middle" font-size="13">Zeit ↓ / …</text><text x="515" y="947" text-anchor="middle" font-size="13">CO₂ (ppm) / …</text>
+    <text x="450" y="1004" text-anchor="middle">Weitere laden</text>
+    <text x="450" y="1080" text-anchor="middle" font-size="13">Maximal 440 CSS-Pixel breit, zentriert; Reihenfolge und Abstaende bleiben gleich.</text>
+    <text x="450" y="1105" text-anchor="middle" font-size="13">Verbindungstaste: Sensor auswaehlen oder Trennen. Weitere laden nur bei nextCursor.</text>
+    <text x="450" y="1130" text-anchor="middle" font-size="13">Tabellenzeilen sind Platzhalter. MeasuredAt = Empfang im Browser.</text>
   </g>
 </svg>

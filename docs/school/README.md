@@ -109,13 +109,18 @@ unterstützen; die Anwendung braucht dafür `localhost` oder HTTPS.
    aktuelle CO₂ in der Anzeige. Der empfangene Wert wird lokal als `sensor`
    gespeichert und automatisch an die Batch-API gesendet. Bei einem API-Ausfall
    bleibt er lokal ausstehend und wird später erneut gesendet.
-2. Nach erfolgreicher Übertragung **Serververlauf** öffnen, einen Zeitraum um
-   den aktuellen Empfangszeitpunkt einstellen und **Laden** anklicken.
-   Die Tabelle zeigt die realen Sensormessungen aus PostgreSQL mit **Quelle=sensor**.
-   Die Zeit entspricht dem Empfang im Browser (`MeasuredAt`).
-3. Den Zeitraum ändern und erneut **Laden** wählen, um die Periodenfilterung zu
+2. Nach erfolgreicher Übertragung in den ständig sichtbaren Filtern **Von** und
+   **Bis** einen Zeitraum um den aktuellen Empfangszeitpunkt einstellen und
+   **Verlauf anzeigen** anklicken. Die Tabelle zeigt **Zeit** und **CO₂ (ppm)**.
+   Für reale Sensormessungen enthält die GET-Antwort `source=sensor`; das Feld
+   wird in der Browser-Tabelle nicht angezeigt. Die Zeit entspricht dem Empfang
+   im Browser (`MeasuredAt`); **Bis** bleibt die exklusive Grenze.
+3. Den Zeitraum ändern und erneut **Verlauf anzeigen** wählen, um die Periodenfilterung zu
    zeigen. Weitere Ergebnisse lassen sich bei vorhandener Folgeseite mit
    **Weitere laden** abrufen.
+   Die Überschriften **Zeit** und **CO₂ (ppm)** wechseln per Klick zwischen
+   auf- und absteigender Sortierung des gesamten Zeitraums. Neue Messungen
+   stehen standardmäßig oben; bei einem Sortierwechsel beginnt die Abfrage neu.
 4. Für die separate Duplikatprüfung die unveränderte `demo-measurements.json`
    erneut senden. Nach dem ersten erfolgreichen Import meldet die API
    `received=10`, `inserted=0`, `duplicates=10`. Diese Demodaten bleiben als

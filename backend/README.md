@@ -48,11 +48,17 @@ strictly before to. Optional deviceId is a nonempty UUID. pageSize defaults to 5
 and accepts 1–200. Invalid/duplicate parameters and malformed cursors return 400.
 The response is `{ items: [...], nextCursor: string | null }`; each item contains
 measurementId, deviceId, source, measuredAt, ppm, segment and receivedAt.
-Order is measuredAt DESC, measurementId DESC. Pass nextCursor as the next request's
-cursor parameter with the same device/from/to filters. A null cursor ends traversal.
-Cursors are versioned base64url tokens, bound to those filters, not authentication
-credentials. Page size may change between pages. Pagination is not a database
-snapshot: concurrent inserts ahead of the cursor require a fresh traversal.
+Optional sort accepts time-desc (default), time-asc, ppm-desc or ppm-asc.
+Time sorting uses measuredAt then measurementId, both in the requested direction.
+PPM sorting uses ppm in the requested direction, then measuredAt DESC and
+measurementId DESC for stable ties. Sorting applies to the full filtered period.
+Pass nextCursor as cursor with the same device/from/to filters and sort.
+Changing sort requires a fresh request without a cursor; reuse returns 400.
+The existing default order and default cursor format remain compatible.
+A null cursor ends traversal. Cursors are versioned base64url tokens bound to
+filters and sort, not authentication credentials. Page size may change between
+pages. Pagination is not a database snapshot: concurrent inserts ahead of the
+cursor require a fresh traversal.
 No schema change or automatic migration is involved.
 
 Tests require real PostgreSQL, not Docker or an in-memory substitute. Inject these

@@ -1,3 +1,4 @@
+import { WebBluetoothAdapter } from '../../data-access/web-bluetooth-adapter';
 import { signal } from '@angular/core';
 import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-sync';
 import { Co2Storage } from '../../data-access/co2-storage';
@@ -21,6 +22,7 @@ describe('DeviceDiscovery', () => {
   });
   afterEach(() => vi.restoreAllMocks());
   it('is collapsed by default, provides accessible disclosure and stops on collapse', () => {
+    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
     const fixture = TestBed.createComponent(DeviceDiscovery);
     fixture.detectChanges();
     const element: HTMLElement = fixture.nativeElement;
@@ -59,10 +61,10 @@ describe('DeviceDiscovery', () => {
     const fixture = TestBed.createComponent(DeviceDiscovery);
     fixture.detectChanges();
     const element: HTMLElement = fixture.nativeElement;
-    element.querySelector('button')!.click(); fixture.detectChanges();
+    expect(element.querySelector('section')).toBeNull();
     expect(element.textContent).toContain('Sensor auswählen');
     expect(initialize).not.toHaveBeenCalled();
-    expect(element.querySelectorAll('button')).toHaveLength(3);
+    expect(element.querySelectorAll('button')).toHaveLength(1);
   });
 });
 
@@ -97,7 +99,7 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
   const flush=async()=>{for(let i=0;i<12;i++) await Promise.resolve();};
   function open() {
     const fixture=TestBed.createComponent(DeviceDiscovery);fixture.detectChanges();
-    const el=fixture.nativeElement as HTMLElement;el.querySelector('button')!.click();fixture.detectChanges();
+    const el=fixture.nativeElement as HTMLElement;if(scanner.available) el.querySelector('button')!.click();fixture.detectChanges();
     return {fixture,el,buttons:()=>Array.from(el.querySelectorAll<HTMLButtonElement>('button.connect'))};
   }
   it('shows connection stages, prevents duplicate operations and displays permanent Info identity after STATUS', async()=>{
@@ -117,6 +119,42 @@ describe('DeviceDiscovery connection UI with a fake session', () => {
     expect(el.textContent).toContain('Sensor verbunden. Die aktuelle Vorschau wird nicht gespeichert.');
     expect(el.textContent).not.toMatch(/Simulator|Simulation|Datenquelle/);
     expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
+  });
+  it('uses one browser button and blocks repeated clicks during selection, connection and disconnection', async () => {
+    scanner.available = false;
+    let selected!: (id: string) => void;
+    let connected!: () => void;
+    let disconnected!: () => void;
+    const web = { choose: vi.fn(() => new Promise<string>(resolve => { selected = resolve; })), message: signal(''), error: signal(null) };
+    TestBed.configureTestingModule({ providers: [{ provide: WebBluetoothAdapter, useValue: web }] });
+    connection.connect.mockImplementationOnce(async () => {
+      connection.state.set('connecting'); connection.phase.set('connect');
+      await new Promise<void>(resolve => { connected = resolve; });
+      connection.state.set('ready'); connection.phase.set('ready');
+    });
+    connection.disconnectByUser.mockImplementationOnce(async () => {
+      connection.phase.set('closing');
+      await new Promise<void>(resolve => { disconnected = resolve; });
+      connection.state.set('idle'); connection.phase.set('idle');
+    });
+    const { fixture, el } = open();
+    const button = el.querySelector<HTMLButtonElement>('.web-connection')!;
+    expect(el.querySelectorAll('button')).toHaveLength(1);
+    expect(el.querySelector('section')).toBeNull();
+    expect(el.textContent).not.toContain('Sensor verbinden');
+    expect(web.choose).not.toHaveBeenCalled();
+    expect(button.textContent?.trim()).toBe('Sensor auswählen');
+    button.click(); fixture.detectChanges(); expect(button.disabled).toBe(true);
+    button.click(); expect(web.choose).toHaveBeenCalledOnce();
+    selected('browser-device'); await flush(); fixture.detectChanges();
+    expect(connection.connect).toHaveBeenCalledExactlyOnceWith('browser-device');
+    expect(button.disabled).toBe(true); button.click(); expect(web.choose).toHaveBeenCalledOnce();
+    connected(); await flush(); fixture.detectChanges();
+    expect(button.textContent?.trim()).toBe('Trennen'); expect(button.disabled).toBe(false);
+    button.click(); fixture.detectChanges(); expect(button.disabled).toBe(true);
+    button.click(); expect(connection.disconnectByUser).toHaveBeenCalledOnce();
+    disconnected(); await flush(); fixture.detectChanges();
+    expect(button.textContent?.trim()).toBe('Sensor auswählen'); expect(button.disabled).toBe(false);
   });
   it('requires an explicit Trennen action before selecting a different device',async()=>{
     connection.state.set('ready');connection.phase.set('ready');connection.info.set({deviceId});

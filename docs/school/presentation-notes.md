@@ -59,10 +59,15 @@ Diagramme: [Domänenmodell](domain-model.puml),
 
 ### 4:00–5:10 · Serververlauf und Filter
 
-- Nach erfolgreicher Übertragung **Serververlauf** öffnen, einen Zeitraum um
-  den aktuellen Empfangszeitpunkt einstellen (Ende exklusiv) und **Laden** anklicken.
-- Reale Datensätze mit Zeit, CO₂ und **Quelle=sensor** zeigen. Die Zeit ist
-  der Empfang im Browser (`MeasuredAt`).
+- Nach erfolgreicher Übertragung in den immer sichtbaren Filtern **Von** und
+  **Bis** einen Zeitraum um den aktuellen Empfangszeitpunkt einstellen
+  (Ende exklusiv) und **Verlauf anzeigen** anklicken.
+- Reale Datensätze mit **Zeit** und **CO₂ (ppm)** zeigen. Die Zeit ist der Empfang
+  im Browser (`MeasuredAt`). `source=sensor` in der GET-Antwort der Browser-
+  Entwicklertools zeigen; Quelle ist keine sichtbare Tabellenspalte mehr.
+- Auf **Zeit** oder **CO₂ (ppm)** klicken: Pfeil und Richtung wechseln.
+  Die Sortierung gilt für den gesamten Zeitraum einschließlich weiterer Seiten;
+  standardmäßig stehen neue Messungen oben.
 - Zeitraum ändern und erneut laden: andere Filter liefern einen anderen
   Ausschnitt der PostgreSQL-Daten.
 

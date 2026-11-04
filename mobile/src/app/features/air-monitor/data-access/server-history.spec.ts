@@ -1,3 +1,4 @@
+import { ANDROID_BLE } from './ble-platform';
 import { TestBed } from '@angular/core/testing';
 import { Capacitor } from '@capacitor/core';
 import { ServerHistory } from './server-history';
@@ -66,6 +67,67 @@ describe('server history HTTP and volatile pages', () => {
     history = TestBed.inject(ServerHistory); history.setFilters(filters); await history.load();
     expect(get.mock.calls[0][0].url).toContain('http://127.0.0.1:5045/api/measurements?'); expect(request).not.toHaveBeenCalled();
   });
+  it('shows browser filters immediately and loads the selected period with Verlauf anzeigen', async () => {
+    const fixture = TestBed.createComponent(ServerHistoryBlock); fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector<HTMLElement>('#server-history')!.hidden).toBe(false);
+    expect(el.querySelector('[aria-controls="server-history"]')).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    const inputs = el.querySelectorAll<HTMLInputElement>('input');
+    for (const [index, value] of ['2026-02-01T12:00', '2026-02-02T12:00'].entries()) {
+      inputs[index].value = value; inputs[index].dispatchEvent(new Event('input'));
+    }
+    fixture.detectChanges();
+    const button = el.querySelector<HTMLButtonElement>('button')!;
+    expect(button.textContent).toBe('Verlauf anzeigen'); button.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const url = new URL(request.mock.calls[0][0] as string, 'http://localhost');
+    expect(url.searchParams.get('from')).toBe(new Date(inputs[0].value).toISOString());
+    expect(url.searchParams.get('to')).toBe(new Date(inputs[1].value).toISOString());
+    await vi.waitFor(() => expect(fixture.debugElement.injector.get(ServerHistory).loading()).toBe(false));
+    fixture.detectChanges(); expect(el.querySelector('tbody tr')).not.toBeNull(); fixture.destroy();
+  });
+  it('sorts through the API, discards old cursors and updates accessible headers', async () => {
+    const fixture = TestBed.createComponent(ServerHistoryBlock); fixture.detectChanges();
+    const service = fixture.debugElement.injector.get(ServerHistory);
+    request.mockResolvedValueOnce(page([row()], 'old-cursor'));
+    await service.load(); fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('caption')).toBeNull();
+    expect(el.querySelector('table')!.classList.contains('browser-history')).toBe(true);
+    const buttons = el.querySelectorAll<HTMLButtonElement>('th button');
+    expect(el.querySelector('th')!.getAttribute('aria-sort')).toBe('descending');
+    for (const [index, sort] of [[0, 'time-asc'], [0, 'time-desc'], [1, 'ppm-desc'], [1, 'ppm-asc']] as const) {
+      el.querySelectorAll<HTMLButtonElement>('th button')[index].click(); fixture.detectChanges();
+      expect(service.nextCursor()).toBeNull();
+      await vi.waitFor(() => expect(service.loading()).toBe(false)); fixture.detectChanges();
+      const url = new URL(request.mock.calls.at(-1)![0] as string, 'http://localhost');
+      expect(url.searchParams.get('sort')).toBe(sort); expect(url.searchParams.has('cursor')).toBe(false);
+      const button = el.querySelectorAll<HTMLButtonElement>('th button')[index];
+      expect(button.parentElement!.getAttribute('aria-sort')).toBe(sort.endsWith('asc') ? 'ascending' : 'descending');
+      expect(button.textContent).toContain(sort.endsWith('asc') ? '\u2191' : '\u2193');
+    }
+    expect(el.querySelector('th')!.getAttribute('aria-sort')).toBe('none');
+    fixture.destroy();
+  });
+  it('keeps Android disclosure, Laden action and Source column', async () => {
+    TestBed.resetTestingModule();
+    TestBed.overrideComponent(ServerHistoryBlock, { add: { providers: [{ provide: ANDROID_BLE, useValue: true }] } });
+    const fixture = TestBed.createComponent(ServerHistoryBlock); fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector<HTMLElement>('#server-history')!.hidden).toBe(true);
+    const button = el.querySelector<HTMLButtonElement>('button')!;
+    expect(button.textContent).toBe('Serververlauf'); button.click(); fixture.detectChanges();
+    expect(el.querySelector<HTMLElement>('#server-history')!.hidden).toBe(false);
+    expect(el.querySelector('#server-history button')!.textContent).toBe('Laden');
+    await fixture.debugElement.injector.get(ServerHistory).load(); fixture.detectChanges();
+    expect(el.querySelectorAll('th')).toHaveLength(3);
+    expect(el.querySelector('caption')!.textContent).toBe('Servermessungen · lokale Zeit');
+    expect(el.querySelector('table')!.classList.contains('browser-history')).toBe(false);
+    expect(el.querySelectorAll('tbody td')).toHaveLength(3);
+    expect(el.querySelector('tbody td:last-child')!.textContent).toBe('sensor');
+    fixture.destroy();
+  });
   it('shows German empty/error states and clears the table immediately when inputs change', async () => {
     const fixture = TestBed.createComponent(ServerHistoryBlock); fixture.detectChanges();
     const service = fixture.debugElement.injector.get(ServerHistory);
@@ -73,8 +135,10 @@ describe('server history HTTP and volatile pages', () => {
     expect(fixture.nativeElement.textContent).toContain('Keine Messungen');
     request.mockResolvedValueOnce(page()); await service.load(); fixture.detectChanges(); expect(fixture.nativeElement.querySelector('tbody tr')).not.toBeNull();
     const headers = Array.from(fixture.nativeElement.querySelectorAll('th') as NodeListOf<HTMLElement>, cell => cell.textContent);
-    expect(headers).toEqual(['Zeit', 'CO₂ (ppm)', 'Quelle']);
-    expect(fixture.nativeElement.querySelectorAll('tbody tr:first-child td')).toHaveLength(3);
+    expect(headers.map(x => x?.trim())).toEqual(['Zeit ↓', 'CO₂ (ppm)']);
+    expect(fixture.nativeElement.querySelectorAll('tbody tr:first-child td')).toHaveLength(2);
+    expect(service.rows()[0].source).toBe('sensor');
+    expect(fixture.nativeElement.textContent).not.toContain('Quelle');
     expect(fixture.nativeElement.querySelectorAll('input')).toHaveLength(2);
     expect(fixture.nativeElement.querySelector('input[type="text"]')).toBeNull();
     expect(fixture.nativeElement.textContent).not.toContain('Geräte-ID');

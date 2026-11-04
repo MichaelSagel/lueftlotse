@@ -6,24 +6,55 @@
 
 *Wireframe der Browseroberfläche.*
 
+Die Browseroberfläche verwendet auf allen Bildschirmbreiten dieselbe einzelne
+Spalte: CO₂-Karte, Sensorverbindung und Serververlauf folgen untereinander.
+Der Inhalt ist maximal 440 CSS-Pixel breit und auf großen Bildschirmen zentriert.
+Reihenfolge und Abstände bleiben gleich; es gibt keine Desktop-Zweispaltenansicht.
+Die Android-Darstellung bleibt unverändert.
+
 Der Wireframe wurde nach der Implementierung anhand der vorhandenen
 Browseroberfläche erstellt. Er ist eine vereinfachte Schwarz-Weiß-Darstellung
-und kein ursprünglicher Entwurf. Sensorverbindung und Serververlauf sind zur
-Veranschaulichung aufgeklappt; lokale Historie und Synchronisierung bleiben
-eingeklappt. Tabellenzeilen sind Platzhalter. **Weitere laden** erscheint im
+und kein ursprünglicher Entwurf. Die Verbindungstaste ist immer sichtbar und
+hat keine äußere Taste „Sensor verbinden“ oder aufklappbare Umrandung.
+Filter und Ergebnisse des Serververlaufs sind immer sichtbar; es gibt keine
+äußere Taste zum Aufklappen. Die Taste **Verlauf anzeigen** lädt den gewählten
+Zeitraum. Die Filter heißen **Von** und **Bis**; Bis bleibt die exklusive Grenze
+in lokaler Zeit.
+Im Browser gibt es nur eine sichtbare Historie:
+**Verlauf anzeigen** lädt den Serververlauf. Lokale Historie und manuelle
+Synchronisierung werden dort nicht angezeigt. Tabellenzeilen sind Platzhalter. **Weitere laden** erscheint im
 fertigen Programm nur, wenn die Serverantwort einen `nextCursor` enthält.
 
-Die aktuelle CO₂-Vorschau ist vom Serververlauf getrennt und wird nicht
-gespeichert. Die Sensorauswahl öffnet den bestehenden Gerätedialog von Chrome.
-Der Serververlauf bietet den vorhandenen Zeitraumfilter, **Laden** sowie die
-Spalten **Zeit**, **CO₂ (ppm)** und **Quelle**. Die Darstellung ergänzt keine
-neuen Funktionen.
+Empfangene LIVE_SAMPLE werden angezeigt, lokal in IndexedDB gespeichert und
+automatisch über die C# API nach PostgreSQL übertragen. MeasuredAt ist die
+Empfangszeit im Browser. Ohne Verbindung verpasste Messungen werden nicht
+nachgeliefert. Lokaler Puffer, Deduplication und automatische Übertragung bleiben
+trotz ausgeblendeter lokaler Historie erhalten; Android bleibt unverändert.
+Die Sensorauswahl öffnet den bestehenden Gerätedialog von Chrome. Eine einzige
+Taste zeigt ohne Verbindung **Sensor auswählen**, mit Verbindung **Trennen**.
+Der Serververlauf bietet den vorhandenen Zeitraumfilter, **Verlauf anzeigen** sowie die
+Spalten **Zeit** und **CO₂ (ppm)**. **Quelle** wird im Browser nicht angezeigt;
+das Feld Source bleibt in Daten und API erhalten. Die Android-Tabelle bleibt
+unverändert. Die Überschriften **Zeit** und **CO₂ (ppm)** sortieren per
+Klick den gesamten gewählten Zeitraum; ein weiterer Klick kehrt die Richtung um.
+Ein Pfeil markiert die aktive Sortierung. Standardmäßig stehen neue Messungen
+oben. Ein Sortierwechsel lädt die erste Serverseite neu; weitere Seiten folgen
+derselben Sortierung.
+Die Browser-Tabelle hat keine zusätzliche Beschriftung über den Spalten.
+Beide Spalten belegen jeweils 50 Prozent der Tabellenbreite; lange Datumswerte
+werden bei Bedarf umgebrochen. Überschriften, Sortierpfeile und Zelleninhalte
+sind in beiden Spalten zentriert. Gewöhnliche Verbindungsstatusmeldungen unter
+der Verbindungstaste und die zusätzliche Schwellenwert-Legende entfallen;
+Verbindungsfehler und die CO₂-Statusanzeige bleiben sichtbar.
 
 ## Screenshot der fertigen Anwendung
 
 ![Fertige Browseroberfläche](application-screenshot.png)
 
-*Screenshot der fertigen Browseroberfläche.*
+*Aktualisierter Screenshot der Browseroberfläche mit verbundenem Sensor:
+eine Spalte, die Taste „Trennen“ sowie ständig sichtbare Von/Bis-Filter und
+„Verlauf anzeigen“. In diesem Aufnahmezustand sind noch keine Tabellenzeilen
+geladen; die sortierbare Tabelle ist im Wireframe schematisch dargestellt.*
 
 Beim Vergleich stehen die Trennung von aktueller Sensoranzeige und Serverdaten,
 die Anordnung der Bedienelemente und die reduzierte Tabelle im Vordergrund.

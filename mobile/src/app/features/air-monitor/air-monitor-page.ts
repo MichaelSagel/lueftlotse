@@ -1,3 +1,4 @@
+import { ANDROID_BLE } from './data-access/ble-platform';
 import { Component, computed, inject, signal } from '@angular/core';
 import { Co2Monitor } from './data-access/co2-monitor';
 import { co2Status } from './domain/co2-status';
@@ -9,6 +10,7 @@ import { ServerHistoryBlock } from './components/server-history/server-history';
 
 @Component({ selector: 'app-air-monitor-page', imports: [Co2Chart, DeviceDiscovery, Synchronization, ServerHistoryBlock], styleUrl: './air-monitor-page.scss', templateUrl: './air-monitor-page.html' })
 export class AirMonitorPage {
+  protected readonly android = inject(ANDROID_BLE);
   protected readonly source = inject(Co2Monitor);
   protected readonly history = inject(Co2History);
   protected readonly historyCreated = signal(false);

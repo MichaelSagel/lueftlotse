@@ -6,7 +6,8 @@ export interface ServerMeasurement {
   measurementId: string; deviceId: string; source: string; measuredAt: string;
   ppm: number; segment: string; receivedAt: string;
 }
-export interface ServerHistoryFilters { from: string; to: string; deviceId: string; }
+export type HistorySort = 'time-desc' | 'time-asc' | 'ppm-desc' | 'ppm-asc';
+export interface ServerHistoryFilters { from: string; to: string; deviceId: string; sort?: HistorySort; }
 interface Page { items: ServerMeasurement[]; nextCursor: string | null; }
 class HistoryError extends Error {}
 
@@ -56,6 +57,7 @@ export class ServerHistory {
       if (deviceId && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deviceId) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(deviceId)))
         throw new HistoryError('Bitte eine gültige Geräte-UUID eingeben oder das Feld leer lassen.');
       const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString(), pageSize: '50' });
+      if (f.sort) params.set('sort', f.sort);
       if (deviceId) params.set('deviceId', deviceId);
       if (more) params.set('cursor', this.nextCursor()!);
       const url = this.endpoint() + '?' + params;

@@ -97,7 +97,8 @@ describe('Shared BLE session and volatile Sensor UI', () => {
     expect(reading()).toBe('—'); expect(el.textContent).toContain('Warte auf einen neuen Sensorwert');
     expect(adapter.subscribe).toHaveBeenCalledOnce();
     expect(el.querySelector('.source-picker, .simulation-toggle, .prototype-warning')).toBeNull();
-    expect(el.textContent).toContain('Sensor verbinden');
+    expect(el.textContent).not.toContain('Sensor verbinden');
+    expect(el.querySelector('app-device-discovery section')).toBeNull();
     emit(sample(1n)); fixture.detectChanges(); expect(reading()).toBe('950');
     expect(el.querySelector('.status')?.textContent).toContain('CO₂-Wert akzeptabel');
     emit(sample(1n, 2222)); fixture.detectChanges(); expect(reading()).toBe('950'); // Duplicate ignored.
