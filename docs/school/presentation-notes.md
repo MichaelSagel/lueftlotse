@@ -4,6 +4,14 @@ Diagramme: [Domänenmodell](domain-model.puml),
 [Architektur](architecture.puml) und
 [GUI-Vergleich](gui-comparison.md).
 
+**Zielzeit: 6 Minuten 20 Sekunden.** Die Stichpunkte sind Erinnerungen für den
+Vortrag; Wartezeit und Klicks sind in den Demozeiten enthalten.
+
+Vorbereitung vor dem Vortrag: Backend und PostgreSQL starten, Chrome öffnen,
+ESP32 bereithalten und die Demodaten einmal erfolgreich importieren. Den
+PowerShell-Aufruf und die Browser-Entwicklertools vorbereiten, damit während
+der Demonstration keine Einrichtung nötig ist.
+
 ## Erklärung – ungefähr 3 Minuten
 
 ### 0:00–0:40 · Idee
@@ -29,10 +37,9 @@ Diagramme: [Domänenmodell](domain-model.puml),
 - Die Oberfläche läuft im Browser.
 - Web Bluetooth ist eine integrierte Schnittstelle von Chrome.
   Mein TypeScript-Code nutzt sie, um Messwerte vom ESP32 zu empfangen.
-  Gültige LIVE_SAMPLE-Werte werden in IndexedDB als `sensor` gespeichert und
-  automatisch über `POST /api/measurements/batch` übertragen.
+  Die Browser-Sitzung speichert gültige LIVE_SAMPLE-Werte in IndexedDB als
+  `sensor` und überträgt sie automatisch über `POST /api/measurements/batch`.
 - Ohne Verbindung verpasste Messungen werden nicht nachträglich wiederhergestellt.
-  Android ist von dieser Änderung nicht betroffen.
 - Serververlauf lädt Daten getrennt über HTTP. Die Antwort bleibt in der
   Oberfläche und wird nicht mit dem lokalen Verlauf vermischt.
 
@@ -46,30 +53,46 @@ Diagramme: [Domänenmodell](domain-model.puml),
 
 ## Live-Demonstration – ungefähr 2 Minuten 50 Sekunden
 
-### 3:00–4:00 · Aktueller CO₂-Wert
+### 3:00–3:40 · CO₂ in Chrome empfangen
 
 - [Anwendung in Chrome öffnen](http://localhost:4200/), **Sensor auswählen**
   anklicken und den Lüftlotse-Sensor wählen.
 - Nach Verbindung auf einen neuen Messwert warten; Wert und ppm-Schwelle zeigen.
+- Die Verbindung ist an der Taste **Trennen** erkennbar; für die weitere
+  Demonstration verbunden bleiben.
 - ppm bedeutet Teile pro Million. 1000 ppm CO₂ entsprechen 0,1 Prozent der Luft.
-- Der empfangene Wert wird lokal gespeichert und automatisch übertragen.
-  Bei einem API-Ausfall bleibt er ausstehend; ein erneuter Versand behält ID und Daten.
 - Ohne ESP32: **Sensor nicht verfügbar** zeigen und erklären, dass der
-  Serververlauf trotzdem funktioniert.
+  Serververlauf trotzdem funktioniert. In diesem Fall lässt sich der Live-Empfang
+  nicht vorführen; gespeicherte Daten nicht als neue Sensormessung ausgeben.
 
-### 4:00–5:10 · Serververlauf und Filter
+### 3:40–4:10 · Lokales Speichern und automatische Übertragung
+
+- Den gerade empfangenen Wert im lokalen IndexedDB-Speicher zeigen und den
+  automatischen POST-Aufruf samt erfolgreicher Antwort in den Entwicklertools.
+- Erklären: Zuerst speichert die Browser-Sitzung lokal, danach sendet sie an die
+  C# API. Dafür ist kein weiterer Klick nötig.
+- Bei einem API-Ausfall bleibt der Wert ausstehend; ein erneuter Versand behält
+  ID und Daten. Den Ausfall nur erklären, nicht während der kurzen Demo erzeugen.
+
+### 4:10–4:40 · Historie für den aktuellen Zeitraum
 
 - Nach erfolgreicher Übertragung in den immer sichtbaren Filtern **Von** und
   **Bis** einen Zeitraum um den aktuellen Empfangszeitpunkt einstellen
-  (Ende exklusiv) und **Verlauf anzeigen** anklicken.
+  (Ende exklusiv). **Bis** etwas nach dem Empfangszeitpunkt wählen, damit der
+  neue Wert im Zeitraum liegt. Dann **Verlauf anzeigen** anklicken.
 - Reale Datensätze mit **Zeit** und **CO₂ (ppm)** zeigen. Die Zeit ist der Empfang
   im Browser (`MeasuredAt`). `source=sensor` in der GET-Antwort der Browser-
   Entwicklertools zeigen; Quelle ist keine sichtbare Tabellenspalte mehr.
-- Auf **Zeit** oder **CO₂ (ppm)** klicken: Pfeil und Richtung wechseln.
+
+### 4:40–5:10 · Zeit und CO₂ sortieren
+
+- Auf **Zeit** klicken und erneut klicken: zuerst alte beziehungsweise neue
+  Messungen zeigen. Danach **CO₂ (ppm)** zweimal anklicken: hohe beziehungsweise
+  niedrige Werte zuerst. Pfeil und Zeilenreihenfolge zeigen.
   Die Sortierung gilt für den gesamten Zeitraum einschließlich weiterer Seiten;
   standardmäßig stehen neue Messungen oben.
-- Zeitraum ändern und erneut laden: andere Filter liefern einen anderen
-  Ausschnitt der PostgreSQL-Daten.
+- Bei vorhandener Folgeseite **Weitere laden** zeigen; die Sortierung bleibt
+  über die Seiten hinweg erhalten.
 
 ### 5:10–5:50 · Wiederholte Übertragung
 
@@ -81,16 +104,17 @@ Diagramme: [Domänenmodell](domain-model.puml),
   `source=simulator`; es bleibt in Daten und API erhalten, wird aber nicht in der
   Browser-Tabelle angezeigt.
 - Die API-Antwort zeigen: `received=10`, `inserted=0`, `duplicates=10`.
-- Serververlauf neu laden: Es bleiben dieselben zehn Datensätze, ohne zusätzliche
-  Zeilen.
+- Mit **Verlauf anzeigen** den Demobereich neu laden: Die zehn Demodatensätze
+  bleiben unverändert, durch den erneuten Import kommen keine Zeilen hinzu.
 - Feste UUIDs und identische Messdaten machen die Wiederholung sicher.
 
 ## Schluss – ungefähr 30 Sekunden
 
 ### 5:50–6:20 · Ergebnis
 
-- Empfangene Sensorwerte werden angezeigt, lokal gespeichert und automatisch
-  an die Serverhistorie übertragen. Ohne Verbindung gibt es keine Nachlieferung.
+- Im gezeigten Browserpfad werden empfangene Sensorwerte angezeigt, lokal
+  gespeichert und automatisch an die Serverhistorie übertragen. Ohne Verbindung
+  gibt es keine Nachlieferung.
 - Angular/TypeScript, C# API, EF Core und PostgreSQL arbeiten als ein Ablauf
   zusammen.
 - Eine Wiederholung derselben Übertragung erzeugt keine doppelten Messungen.
