@@ -98,6 +98,8 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
     TestBed.configureTestingModule({imports:[AirMonitorPage],providers:[...routes[0].providers!,
       BleConnection,{provide:BLE_SESSION,useExisting:BleConnection}, // Explicit wire/peripheral fake; production Android uses the native service.
       Co2Simulator,{provide:CO2_SOURCE,useExisting:Co2Simulator},{provide:BLE_ADAPTER,useValue:peripheral}]});
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable:true, value:function(this:HTMLDialogElement){this.open=true;} });
+    Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable:true, value:function(this:HTMLDialogElement){this.open=false;} });
     const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
     const discovery = fixture.debugElement.query(By.directive(DeviceDiscovery));
     const injector = discovery.injector;
@@ -120,16 +122,14 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
     };
     const settled = async()=>{await fixture.whenStable(); await history.whenSettled(); fixture.detectChanges();};
     const download = async()=>{
-      await until(()=>{fixture.detectChanges();expect(button('Journalmessungen herunterladen').disabled).toBe(false);});
-      button('Journalmessungen herunterladen').click();
-      await until(()=>expect(journal.running()).toBe(false));
+      const result = await journal.run();
+      expect(result.status).toBe('complete');
       await settled();
     };
     try {
-      button('Sensor verbinden').click(); fixture.detectChanges();
-      button('Geräte suchen').click(); await until(()=>expect(scanner.busy()).toBe(false)); await settled();
+      button('Sensor auswählen').click(); fixture.detectChanges(); await until(()=>expect(scanner.busy()).toBe(false)); await settled();
       expect(scanner.devices()).toEqual([{id:address,name:'Lüftlotse Test',rssi:-50}]);
-      button('Verbinden').click(); await until(()=>expect(connection.state()).toBe('ready')); await settled();
+      (el.querySelector('.connect') as HTMLButtonElement).click(); await until(()=>expect(connection.state()).toBe('ready')); await settled();
       expect(connection.state()).toBe('ready'); expect(connection.info()?.deviceId).toBe(deviceId);
       expect(peripheral.log.slice(0,8)).toEqual(['initialize','scan','scan-stop','initialize','connect','info','subscribe','status']);
       expect(peripheral.fetches).toEqual([]); // Handshake does not start journal download.
@@ -138,7 +138,7 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
       expect(peripheral.fetches).toEqual([0n,2n]); expect(peripheral.acknowledged).toEqual([2n,4n]);
       expect(await storage.bleCursor(deviceId)).toBe(4n); expect(journal.savedMeasurements()).toBe(4);
       expect(history.count()).toBe(5); expect(history.rangeCount()).toBe(5);
-      expect(el.querySelector('.download-result')?.textContent).toContain('abgeschlossen');
+      expect(el.querySelector('.download-result, .download')).toBeNull();
 
       const snapshot = async()=>{
         const db = await new Promise<IDBDatabase>((resolve,reject)=>{const r=indexedDB.open('lueftlotse');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
@@ -161,7 +161,8 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
       await until(()=>expect(connection.binding()?.connectionEnabled).toBe(false));
       expect(await storage.bleCursor(deviceId)).toBe(4n);
       peripheral.add(); // The ring retains old records; a new measurement appeared while disconnected.
-      button('Verbinden').click(); await until(()=>expect(connection.state()).toBe('ready')); await settled();
+      button('Sensor auswählen').click(); await settled();
+      (el.querySelector('.connect-saved') as HTMLButtonElement).click(); await until(()=>expect(connection.state()).toBe('ready')); await settled();
       expect(peripheral.fetches).toEqual([0n,2n]);
       await download();
       expect(peripheral.fetches).toEqual([0n,2n,4n]); expect(peripheral.acknowledged).toEqual([2n,4n,5n]);
@@ -171,7 +172,7 @@ describe('Manual BLE discovery-to-persistent-history workflow',()=>{
       expect(second.filter(row=>row.source==='sensor').map(row=>row.measurementId)).toEqual(peripheral.records.map(row=>row.measurementId));
       expect(history.count()).toBe(6); expect(history.rangeCount()).toBe(6);
       expect(simulator.current()).toBe(current); expect(simulator.state()).toBe(sourceState); expect(sourceReadings).toEqual([]);
-      expect((fixture.nativeElement as HTMLElement).querySelector('.badge')?.textContent).toBe('Sensor');
+      expect((fixture.nativeElement as HTMLElement).querySelector('.badge')).toBeNull();
       expect((fixture.nativeElement as HTMLElement).querySelector('.measurement strong')?.textContent).toBe('1234');
       expect(injector.get(BleJournalSync)).toBe(journal); expect(injector.get(BleConnection)).toBe(connection);
       button('Trennen').click(); await until(()=>expect(connection.state()).toBe('idle')); await settled(); expect(peripheral.subscriptions).toBe(0);

@@ -1,4 +1,3 @@
-import { ANDROID_BLE } from './ble-platform';
 import { TestBed } from '@angular/core/testing';
 import { Capacitor } from '@capacitor/core';
 import { ServerHistory } from './server-history';
@@ -94,7 +93,6 @@ describe('server history HTTP and volatile pages', () => {
     await service.load(); fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('caption')).toBeNull();
-    expect(el.querySelector('table')!.classList.contains('browser-history')).toBe(true);
     const buttons = el.querySelectorAll<HTMLButtonElement>('th button');
     expect(el.querySelector('th')!.getAttribute('aria-sort')).toBe('descending');
     for (const [index, sort] of [[0, 'time-asc'], [0, 'time-desc'], [1, 'ppm-desc'], [1, 'ppm-asc']] as const) {
@@ -110,23 +108,26 @@ describe('server history HTTP and volatile pages', () => {
     expect(el.querySelector('th')!.getAttribute('aria-sort')).toBe('none');
     fixture.destroy();
   });
-  it('keeps Android disclosure, Laden action and Source column', async () => {
+  it('uses the same sorting controls with native HTTP on Android', async () => {
     TestBed.resetTestingModule();
-    TestBed.overrideComponent(ServerHistoryBlock, { add: { providers: [{ provide: ANDROID_BLE, useValue: true }] } });
+    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
+    vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true);
+    const get = vi.spyOn(ServerHistory.prototype, 'getNative').mockResolvedValue({ status: 200, data: { items: [row()], nextCursor: null }, headers: {}, url: '' });
+    TestBed.configureTestingModule({ providers: [{ provide: MEASUREMENT_API_CONFIG, useValue: { browserBaseUrl: '/api', nativeBaseUrl: 'http://127.0.0.1:5045/api', usbDebug: true } }] });
     const fixture = TestBed.createComponent(ServerHistoryBlock); fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector<HTMLElement>('#server-history')!.hidden).toBe(true);
-    const button = el.querySelector<HTMLButtonElement>('button')!;
-    expect(button.textContent).toBe('Serververlauf'); button.click(); fixture.detectChanges();
     expect(el.querySelector<HTMLElement>('#server-history')!.hidden).toBe(false);
-    expect(el.querySelector('#server-history button')!.textContent).toBe('Laden');
-    await fixture.debugElement.injector.get(ServerHistory).load(); fixture.detectChanges();
-    expect(el.querySelectorAll('th')).toHaveLength(3);
-    expect(el.querySelector('caption')!.textContent).toBe('Servermessungen · lokale Zeit');
-    expect(el.querySelector('table')!.classList.contains('browser-history')).toBe(false);
-    expect(el.querySelectorAll('tbody td')).toHaveLength(3);
-    expect(el.querySelector('tbody td:last-child')!.textContent).toBe('sensor');
-    fixture.destroy();
+    const button = el.querySelector<HTMLButtonElement>('button')!;
+    expect(button.textContent).toBe('Verlauf anzeigen'); button.click();
+    const service = fixture.debugElement.injector.get(ServerHistory);
+    await vi.waitFor(() => expect(service.loading()).toBe(false)); fixture.detectChanges();
+    expect(el.querySelector('caption')).toBeNull();
+    expect(el.querySelectorAll('th')).toHaveLength(2); expect(el.querySelectorAll('tbody td')).toHaveLength(2);
+    el.querySelector<HTMLButtonElement>('th button')!.click();
+    await vi.waitFor(() => expect(service.loading()).toBe(false)); fixture.detectChanges();
+    expect(new URL(get.mock.calls.at(-1)![0].url).searchParams.get('sort')).toBe('time-asc');
+    expect(el.querySelector('th')!.getAttribute('aria-sort')).toBe('ascending');
+    expect(request).not.toHaveBeenCalled(); fixture.destroy();
   });
   it('shows German empty/error states and clears the table immediately when inputs change', async () => {
     const fixture = TestBed.createComponent(ServerHistoryBlock); fixture.detectChanges();

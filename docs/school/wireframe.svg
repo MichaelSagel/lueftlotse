@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="1160" viewBox="0 0 900 1160" role="img" aria-labelledby="title description">
-  <title id="title">Browser-Wireframe: eine Spalte auf allen Bildschirmbreiten</title>
+  <title id="title">Gemeinsamer UI-Wireframe: Browser und Android</title>
   <desc id="description">CO2, Sensorverbindung und Serververlauf untereinander. Inhalt auf grossen Bildschirmen zentriert, maximal 440 CSS-Pixel breit. Verbindungstaste immer sichtbar; Serverfilter und Ergebnisse immer sichtbar; Tabellenzeilen sind Platzhalter.</desc>
   <rect width="900" height="1160" fill="white"/>
   <g fill="none" stroke="black" stroke-width="2">
@@ -15,7 +15,7 @@
     <rect x="320" y="980" width="260" height="35" rx="6"/>
   </g>
   <g fill="black" font-family="Arial, sans-serif" font-size="16">
-    <text x="450" y="35" text-anchor="middle" font-weight="bold">Browser: eine Spalte auf Mobil und Desktop</text>
+    <text x="450" y="35" text-anchor="middle" font-weight="bold">Browser und Android: eine Spalte</text>
     <text x="310" y="95" font-size="13">RAUMLUFT IM BLICK</text>
     <text x="310" y="135" font-size="26" font-weight="bold">Lüftlotse</text>
     <text x="450" y="190" text-anchor="middle">CO₂-Konzentration</text>

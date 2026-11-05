@@ -1,263 +1,83 @@
-import { WebBluetoothAdapter } from '../../data-access/web-bluetooth-adapter';
 import { signal } from '@angular/core';
-import { BleJournalSync, JournalResult } from '../../data-access/ble-journal-sync';
+import { TestBed } from '@angular/core/testing';
+import { DeviceDiscovery } from './device-discovery';
+import { BLE_SESSION } from '../../data-access/ble-session';
+import { WebBluetoothAdapter } from '../../data-access/web-bluetooth-adapter';
+import { BleScanner } from '../../data-access/ble-scanner';
+import { BleJournalSync } from '../../data-access/ble-journal-sync';
+import { BleConnection } from '../../data-access/ble-connection';
 import { Co2Storage } from '../../data-access/co2-storage';
 import { Co2History } from '../../data-access/co2-history';
 import { testStorage } from '../../data-access/co2-storage.testing';
 import { routes } from '../../../../app.routes';
-import { BleConnection } from '../../data-access/ble-connection';
-import { BLE_SESSION } from '../../data-access/ble-session';
-import { TestBed } from '@angular/core/testing';
-import { BleClient } from '@capacitor-community/bluetooth-le';
-import { Capacitor } from '@capacitor/core';
-import { DeviceDiscovery } from './device-discovery';
-import { BleScanner } from '../../data-access/ble-scanner';
-import { BleBinding } from '../../data-access/ble-binding-storage';
-import { testBleBindingStorage } from '../../data-access/ble-binding.testing';
 
-describe('DeviceDiscovery', () => {
-  beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [BleScanner, BleConnection, {provide:BLE_SESSION,useExisting:BleConnection}, testBleBindingStorage().provider] });
-    TestBed.overrideComponent(DeviceDiscovery,{add:{providers:[{provide:BleJournalSync,useValue:{running:signal(false),savedMeasurements:signal(0),run:vi.fn(),cancel:vi.fn()}}]}});
-  });
-  afterEach(() => vi.restoreAllMocks());
-  it('is collapsed by default, provides accessible disclosure and stops on collapse', () => {
-    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
-    const fixture = TestBed.createComponent(DeviceDiscovery);
-    fixture.detectChanges();
-    const element: HTMLElement = fixture.nativeElement;
-    const button = element.querySelector('button')!;
-    const section = element.querySelector('section')!;
-    const stop = vi.spyOn(fixture.debugElement.injector.get(BleScanner), 'stop').mockResolvedValue();
-    expect(button.getAttribute('aria-controls')).toBe(section.id);
-    expect(button.getAttribute('aria-expanded')).toBe('false');
-    expect(section.hidden).toBe(true);
-    button.click(); fixture.detectChanges();
-    expect(button.getAttribute('aria-expanded')).toBe('true');
-    expect(section.hidden).toBe(false);
-    button.click(); fixture.detectChanges();
-    expect(section.hidden).toBe(true);
-    expect(stop).toHaveBeenCalledOnce();
-  });
-  it('handles stop errors from the stop button and collapse without unhandled rejections', async () => {
-    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
-    const fixture = TestBed.createComponent(DeviceDiscovery);
-    const scanner = fixture.debugElement.injector.get(BleScanner);
-    const stop = vi.spyOn(scanner, 'stop').mockRejectedValue(new Error('stop failed'));
-    scanner.state.set('scanning'); fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement;
-    const disclosure = el.querySelector('button')!;
-    disclosure.click(); fixture.detectChanges();
-    Array.from(el.querySelectorAll('button')).find(b => b.textContent === 'Suche stoppen')!.click();
-    await Promise.resolve();
-    disclosure.click(); await Promise.resolve();
-    expect(stop).toHaveBeenCalledTimes(2);
-    stop.mockResolvedValue(); fixture.destroy();
-  });
-
-  it('explains Android availability without native calls in the browser', () => {
-    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('web');
-    const initialize = vi.spyOn(BleClient, 'initialize');
-    const fixture = TestBed.createComponent(DeviceDiscovery);
-    fixture.detectChanges();
-    const element: HTMLElement = fixture.nativeElement;
-    expect(element.querySelector('section')).toBeNull();
-    expect(element.textContent).toContain('Sensor auswählen');
-    expect(initialize).not.toHaveBeenCalled();
-    expect(element.querySelectorAll('button')).toHaveLength(1);
-  });
-});
-
-describe('DeviceDiscovery connection UI with a fake session', () => {
-  const deviceId = '12345678-1234-4234-8234-123456789abc';
-  let calls: string[];
-  let journal: {running: ReturnType<typeof signal<boolean>>; savedMeasurements: ReturnType<typeof signal<number>>; run: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn>};
-  let connection: {state: ReturnType<typeof signal<string>>; phase: ReturnType<typeof signal<string>>;
-    info: ReturnType<typeof signal<{deviceId:string}|null>>; error: ReturnType<typeof signal<string|null>>;
-    binding: ReturnType<typeof signal<BleBinding|null>>; bindingError: ReturnType<typeof signal<string|null>>;
-    bindingLoading: ReturnType<typeof signal<boolean>>;
-    connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
-    disconnectByUser: ReturnType<typeof vi.fn>; forgetDevice: ReturnType<typeof vi.fn>; attachClient: ReturnType<typeof vi.fn>};
-  let scanner: {available: boolean; state: ReturnType<typeof signal<string>>; busy: ReturnType<typeof signal<boolean>>;
-    devices: ReturnType<typeof signal<{id:string;name:string;rssi:number}[]>>; message: ReturnType<typeof signal<string>>;
-    start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>};
-  beforeEach(() => {
-    calls=[];
-    journal={running:signal(false),savedMeasurements:signal(0),run:vi.fn(async()=>({status:'complete',message:'OK'})),cancel:vi.fn()};
-    connection={state:signal('idle'),phase:signal('idle'),info:signal(null),error:signal(null),
-      binding:signal(null),bindingError:signal(null),bindingLoading:signal(false),
-      connect:vi.fn(async (id:string)=>{calls.push('connect:'+id);connection.info.set({deviceId});connection.state.set('ready');connection.phase.set('ready');}),
-      disconnect:vi.fn(async ()=>{calls.push('disconnect');connection.state.set('idle');connection.phase.set('idle');connection.info.set(null);}),
-      disconnectByUser:vi.fn(async()=>{await connection.disconnect();const saved=connection.binding();if(saved)connection.binding.set({...saved,connectionEnabled:false});}),
-      forgetDevice:vi.fn(async()=>{await connection.disconnect();connection.binding.set(null);}),
-      attachClient:vi.fn(()=>({...connection,revoke:vi.fn()})),
-    };
-    scanner={available:true,state:signal('done'),busy:signal(false),devices:signal([{id:'ble-a',name:'Sensor A',rssi:-55},{id:'ble-b',name:'Sensor B',rssi:-65}]),
-      message:signal('Suche beendet.'),start:vi.fn(async()=>{}),stop:vi.fn(async()=>{})};
-    TestBed.overrideComponent(DeviceDiscovery,{set:{providers:[{provide:BLE_SESSION,useValue:connection},{provide:BleScanner,useValue:scanner},{provide:BleJournalSync,useValue:journal}]}});
-  });
-  const flush=async()=>{for(let i=0;i<12;i++) await Promise.resolve();};
-  function open() {
-    const fixture=TestBed.createComponent(DeviceDiscovery);fixture.detectChanges();
-    const el=fixture.nativeElement as HTMLElement;if(scanner.available) el.querySelector('button')!.click();fixture.detectChanges();
-    return {fixture,el,buttons:()=>Array.from(el.querySelectorAll<HTMLButtonElement>('button.connect'))};
+const flush = async () => { for(let i=0;i<16;i++) await Promise.resolve(); };
+describe.each([false,true])('shared connection UI, native scanner=%s', native => {
+  const saved = {version:1,deviceId:'00112233-4455-4677-8899-aabbccddeeff',bleAddress:'address',connectionEnabled:true};
+  let connection: ReturnType<typeof session>;
+  let scanner: {available:boolean;busy:ReturnType<typeof signal<boolean>>;devices:ReturnType<typeof signal<{id:string;name:string}[]>>;start:ReturnType<typeof vi.fn>;stop:ReturnType<typeof vi.fn>;message:()=>string};
+  let web: { choose:ReturnType<typeof vi.fn>;error:ReturnType<typeof signal<string|null>> };
+  function session() {
+    return { state:signal('idle'), phase:signal('idle'),bindingLoading:signal(false),binding:signal<typeof saved|null>(null),bindingError:signal<string|null>(null),error:signal<string|null>(null),
+      connect:vi.fn(async (_id:string)=>{}),disconnectByUser:vi.fn(async()=>{}),forgetDevice:vi.fn(async()=>{}),revoke:vi.fn(),attachClient:vi.fn() };
   }
-  it('shows connection stages, prevents duplicate operations and displays permanent Info identity after STATUS', async()=>{
+  beforeEach(() => {
+    connection=session();connection.attachClient.mockReturnValue(connection);
+    connection.connect.mockImplementation(async()=>{connection.state.set('ready');connection.phase.set('ready');});
+    connection.disconnectByUser.mockImplementation(async()=>{connection.state.set('idle');connection.phase.set('idle');});
+    connection.forgetDevice.mockImplementation(async()=>{connection.binding.set(null);});
+    scanner={available:native,busy:signal(false),devices:signal([{id:'address',name:'Sensor A'}]),start:vi.fn(async()=>{}),stop:vi.fn(async()=>{}),message:()=>''};
+    web={choose:vi.fn(async()=> 'address'),error:signal<string|null>(null)};
+    TestBed.configureTestingModule({providers:[{provide:BLE_SESSION,useValue:connection},{provide:BleScanner,useValue:scanner},{provide:WebBluetoothAdapter,useValue:web}]});
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable:true, value:function(this:HTMLDialogElement){this.open=true;} });
+    Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable:true, value:function(this:HTMLDialogElement){this.open=false;} });
+  });
+  afterEach(()=>{TestBed.resetTestingModule();vi.restoreAllMocks();Reflect.deleteProperty(HTMLDialogElement.prototype,'showModal');Reflect.deleteProperty(HTMLDialogElement.prototype,'close');});
+  function render(){const fixture=TestBed.createComponent(DeviceDiscovery);fixture.detectChanges();const el=fixture.nativeElement as HTMLElement;return {fixture,el,button:el.querySelector<HTMLButtonElement>('.connection-action')!};}
+  async function choose(el:HTMLElement,button:HTMLButtonElement){button.click();await flush();if(native){(el.querySelector('.connect') as HTMLButtonElement).click();await flush();}}
+  it('has the same single permanent button and uses the selected platform for device choice',async()=>{
+    const {fixture,el,button}=render();
+    expect(button.textContent?.trim()).toBe('Sensor auswählen');expect(el.querySelectorAll(':scope > button')).toHaveLength(1);
+    expect(el.querySelector('section')).toBeNull();expect(el.textContent).not.toContain('Sensor verbinden');
+    expect(connection.connect).not.toHaveBeenCalled();
+    await choose(el,button);fixture.detectChanges();
+    expect(connection.connect).toHaveBeenCalledExactlyOnceWith('address');
+    expect(button.textContent?.trim()).toBe('Trennen');
+    if(native){expect(scanner.start).toHaveBeenCalledOnce();expect(scanner.stop).toHaveBeenCalledOnce();expect(web.choose).not.toHaveBeenCalled();expect(el.querySelector('dialog')!.open).toBe(false);}
+    else {expect(web.choose).toHaveBeenCalledOnce();expect(scanner.start).not.toHaveBeenCalled();}
+    button.click();await flush();fixture.detectChanges();expect(connection.disconnectByUser).toHaveBeenCalledOnce();expect(button.textContent?.trim()).toBe('Sensor auswählen');
+    fixture.destroy();expect(connection.revoke).toHaveBeenCalledOnce();
+  });
+  it('blocks duplicate clicks while selecting, connecting and disconnecting',async()=>{
     let finish!:()=>void;
-    connection.connect.mockImplementationOnce(async(id:string)=>{calls.push('connect:'+id);connection.state.set('connecting');connection.phase.set('info');await new Promise<void>(r=>finish=r);connection.state.set('ready');connection.phase.set('ready');connection.info.set({deviceId});});
-    const {fixture,el,buttons}=open();buttons()[0].click();await flush();fixture.detectChanges();
-    expect(el.querySelector('.connection-status')?.textContent).toContain('Protokollversion');
-    for(const button of buttons()) expect(button.disabled).toBe(true);
-    const scan=Array.from(el.querySelectorAll<HTMLButtonElement>('button')).find(b=>b.textContent==='Geräte suchen')!;
-    expect(scan.disabled).toBe(true);buttons()[0].click();scan.click();
-    expect(connection.connect).toHaveBeenCalledOnce();expect(scanner.start).not.toHaveBeenCalled();
-    connection.phase.set('subscribe');fixture.detectChanges();expect(el.textContent).toContain('Benachrichtigungen');
-    connection.phase.set('status');fixture.detectChanges();expect(el.textContent).toContain('Gerätestatus');
-    expect(el.querySelector('.device-id')).toBeNull();
-    finish();await flush();fixture.detectChanges();
-    expect(el.querySelector('.device-id')?.textContent).toContain(deviceId);
-    expect(el.textContent).toContain('Sensor verbunden. Die aktuelle Vorschau wird nicht gespeichert.');
-    expect(el.textContent).not.toMatch(/Simulator|Simulation|Datenquelle/);
-    expect(el.querySelector('.disconnect')?.textContent).toBe('Trennen');
+    connection.connect.mockImplementationOnce(async()=>{connection.state.set('connecting');await new Promise<void>(r=>finish=r);connection.state.set('ready');});
+    const {fixture,el,button}=render();button.click();await flush();fixture.detectChanges();
+    expect(button.disabled).toBe(true);button.click();
+    if(native){expect(scanner.start).toHaveBeenCalledOnce();(el.querySelector('.connect') as HTMLButtonElement).click();await flush();}
+    else expect(web.choose).toHaveBeenCalledOnce();
+    fixture.detectChanges();expect(button.disabled).toBe(true);expect(connection.connect).toHaveBeenCalledOnce();
+    finish();await flush();fixture.detectChanges();expect(button.disabled).toBe(false);
+    connection.disconnectByUser.mockImplementationOnce(()=>new Promise<void>(r=>finish=r));
+    button.click();fixture.detectChanges();expect(button.disabled).toBe(true);button.click();expect(connection.disconnectByUser).toHaveBeenCalledOnce();finish();await flush();fixture.destroy();
   });
-  it('uses one browser button and blocks repeated clicks during selection, connection and disconnection', async () => {
-    scanner.available = false;
-    let selected!: (id: string) => void;
-    let connected!: () => void;
-    let disconnected!: () => void;
-    const web = { choose: vi.fn(() => new Promise<string>(resolve => { selected = resolve; })), message: signal(''), error: signal(null) };
-    TestBed.configureTestingModule({ providers: [{ provide: WebBluetoothAdapter, useValue: web }] });
-    connection.connect.mockImplementationOnce(async () => {
-      connection.state.set('connecting'); connection.phase.set('connect');
-      await new Promise<void>(resolve => { connected = resolve; });
-      connection.state.set('ready'); connection.phase.set('ready');
+  it('preserves errors and does not show ordinary ready messages',async()=>{
+    const {fixture,el}=render();connection.state.set('ready');connection.phase.set('ready');connection.error.set('BLE cleanup failed');fixture.detectChanges();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('sicher beendet');expect(el.textContent).not.toContain('Verbindung bereit.');fixture.destroy();
+  });
+  if(native){
+    it('cancels the selector safely and forgets a saved binding only explicitly',async()=>{
+      connection.binding.set(saved);const {fixture,el,button}=render();button.click();await flush();fixture.detectChanges();
+      expect(connection.forgetDevice).not.toHaveBeenCalled();(el.querySelector('.forget') as HTMLButtonElement).click();await flush();fixture.detectChanges();
+      expect(connection.forgetDevice).toHaveBeenCalledOnce();expect(connection.connect).not.toHaveBeenCalled();
+      (el.querySelector('.cancel-selection') as HTMLButtonElement).click();await flush();fixture.detectChanges();
+      expect(scanner.stop).toHaveBeenCalledOnce();expect(el.querySelector('dialog')!.open).toBe(false);expect(button.disabled).toBe(false);fixture.destroy();
     });
-    connection.disconnectByUser.mockImplementationOnce(async () => {
-      connection.phase.set('closing');
-      await new Promise<void>(resolve => { disconnected = resolve; });
-      connection.state.set('idle'); connection.phase.set('idle');
+    it('does not connect when scanner cleanup fails',async()=>{
+      scanner.stop.mockRejectedValue(new Error('scan stop uncertain'));const {fixture,el,button}=render();await choose(el,button);fixture.detectChanges();
+      expect(connection.connect).not.toHaveBeenCalled();expect(el.querySelector('[role="alert"]')?.textContent).toContain('keine Verbindung gestartet');fixture.destroy();
     });
-    const { fixture, el } = open();
-    const button = el.querySelector<HTMLButtonElement>('.web-connection')!;
-    expect(el.querySelectorAll('button')).toHaveLength(1);
-    expect(el.querySelector('section')).toBeNull();
-    expect(el.textContent).not.toContain('Sensor verbinden');
-    expect(web.choose).not.toHaveBeenCalled();
-    expect(button.textContent?.trim()).toBe('Sensor auswählen');
-    button.click(); fixture.detectChanges(); expect(button.disabled).toBe(true);
-    button.click(); expect(web.choose).toHaveBeenCalledOnce();
-    selected('browser-device'); await flush(); fixture.detectChanges();
-    expect(connection.connect).toHaveBeenCalledExactlyOnceWith('browser-device');
-    expect(button.disabled).toBe(true); button.click(); expect(web.choose).toHaveBeenCalledOnce();
-    connected(); await flush(); fixture.detectChanges();
-    expect(button.textContent?.trim()).toBe('Trennen'); expect(button.disabled).toBe(false);
-    button.click(); fixture.detectChanges(); expect(button.disabled).toBe(true);
-    button.click(); expect(connection.disconnectByUser).toHaveBeenCalledOnce();
-    disconnected(); await flush(); fixture.detectChanges();
-    expect(button.textContent?.trim()).toBe('Sensor auswählen'); expect(button.disabled).toBe(false);
-  });
-  it('requires an explicit Trennen action before selecting a different device',async()=>{
-    connection.state.set('ready');connection.phase.set('ready');connection.info.set({deviceId});
-    const {fixture,buttons}=open();buttons()[1].click();await flush();fixture.detectChanges();
-    expect(buttons()[1].disabled).toBe(true);expect(calls).toEqual([]);expect(connection.connect).not.toHaveBeenCalled();
-  });
-  it('keeps a ready connection when collapsed and disconnects only through Trennen',async()=>{
-    const {fixture,el,buttons}=open();buttons()[0].click();await flush();fixture.detectChanges();
-    connection.disconnect.mockClear();el.querySelector('button')!.click();fixture.detectChanges();
-    expect(scanner.stop).toHaveBeenCalledOnce();expect(connection.disconnect).not.toHaveBeenCalled();
-    expect(connection.state()).toBe('ready');
-    el.querySelector('button')!.click();fixture.detectChanges();
-    (el.querySelector('.disconnect') as HTMLButtonElement).click();await flush();fixture.detectChanges();
-    expect(connection.disconnect).toHaveBeenCalledOnce();expect(el.querySelector('.device-id')).toBeNull();
-    expect(connection.disconnectByUser).toHaveBeenCalledOnce();
-  });
-  it.each([['Unsupported Info version','Protokoll v1.0'],['STATUS timed out','Zeitüberschreitung'],['BLE cleanup failed','sicher beendet'],
-    ['BLE binding UUID mismatch','stimmt nicht mit dem gespeicherten Sensor überein'],
-    ['BLE binding storage could not be saved','Gerätebindung oder Verbindungsabsicht'],
-    ['BLE migration failed: disk error','Verbindung bleibt gesperrt'], ['BLE permissions: denied','Benachrichtigungen erlauben'],
-    ['scan stop uncertain','keine Verbindung gestartet']])('translates %s and handles rejected promises',async(message,text)=>{
-    connection.connect.mockRejectedValueOnce(new Error(message));
-    const {fixture,el,buttons}=open();buttons()[0].click();await flush();fixture.detectChanges();
-    expect(el.querySelector('[role="alert"]')?.textContent).toContain(text);
-  });
-  it('never starts a replacement if prior cleanup fails and shows asynchronous cleanup errors',async()=>{
-    connection.state.set('ready');connection.phase.set('ready');
-    connection.error.set('BLE cleanup failed');
-    const {fixture,el,buttons}=open();buttons()[1].click();await flush();fixture.detectChanges();
-    expect(connection.connect).not.toHaveBeenCalled();expect(el.querySelector('[role="alert"]')?.textContent).toContain('sicher beendet');
-    connection.error.set('BLE cleanup failed; session cannot be reused');fixture.detectChanges();
-    expect(el.querySelector('[role="alert"]')?.textContent).toContain('vollständig schließen');
-  });
-  it('downloads only explicitly after handshake, blocks switching and retains the same run when collapsed',async()=>{
-    let finish!: (result:JournalResult)=>void;
-    journal.run.mockImplementationOnce(async()=>{journal.running.set(true);const result=await new Promise<JournalResult>(r=>finish=r);journal.running.set(false);return result;});
-    const {fixture,el,buttons}=open();expect(el.querySelector('.download')).toBeNull();
-    buttons()[0].click();await flush();fixture.detectChanges();expect(journal.run).not.toHaveBeenCalled();
-    (el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
-    expect(journal.run).toHaveBeenCalledOnce();expect(el.textContent).toContain('heruntergeladen');
-    expect((el.querySelector('.download') as HTMLButtonElement).disabled).toBe(true);
-    expect((el.querySelector('.disconnect') as HTMLButtonElement).disabled).toBe(true);
-    expect(buttons().every(b=>b.disabled)).toBe(true);
-    buttons()[1].click();expect(connection.connect).toHaveBeenCalledOnce();
-    journal.savedMeasurements.set(12);fixture.detectChanges();expect(el.querySelector('.download-count')?.textContent).toContain('12 Messwerte');
-    connection.disconnect.mockClear();el.querySelector('button')!.click();fixture.detectChanges();el.querySelector('button')!.click();fixture.detectChanges();
-    expect(journal.run).toHaveBeenCalledOnce();expect(journal.cancel).not.toHaveBeenCalled();expect(connection.disconnect).not.toHaveBeenCalled();
-    journal.cancel.mockImplementationOnce(()=>finish({status:'cancelled',message:'OK'}));
-    (el.querySelector('.cancel-download') as HTMLButtonElement).click();expect(journal.cancel).toHaveBeenCalledOnce();await flush();fixture.detectChanges();
-    expect(el.querySelector('.download-result')?.textContent).toContain('abgebrochen');
-    expect(el.querySelector('.download-count')?.textContent).toContain('12 Messwerte');expect(el.querySelector('.cancel-download')).toBeNull();
-  });
-  it.each([
-    ['complete','abgeschlossen'],['cancelled','abgebrochen'],['disconnected','verloren'],
-    ['time-required','erforderlich'],['busy','beschäftigt'],['error','Fehler'],['clock-invalid','Ungültige'],['unsupported','nicht unterstützt'],
-  ] as const)('shows the coordinator result %s',async(status,label)=>{
-    connection.state.set('ready');connection.phase.set('ready');journal.run.mockResolvedValueOnce({status,message:'Details'});
-    const {fixture,el}=open();(el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
-    expect(el.querySelector('.download-result')?.textContent).toContain(label);
-  });
-  it('handles unexpected coordinator rejection without an unhandled promise',async()=>{
-    connection.state.set('ready');connection.phase.set('ready');journal.run.mockRejectedValueOnce(new Error('failure'));
-    const {fixture,el}=open();(el.querySelector('.download') as HTMLButtonElement).click();await flush();fixture.detectChanges();
-    expect(el.querySelector('.download-result')?.textContent).toContain('Fehler');
-  });
-
-  it('shows the saved identity/address and connects only when the saved-device button is clicked',async()=>{
-    connection.binding.set({version:1,deviceId,bleAddress:'AA:BB:CC:DD:EE:01',connectionEnabled:false});
-    const {fixture,el}=open();
-    expect(el.querySelector('.saved-device')?.textContent).toContain(deviceId);
-    expect(el.querySelector('.saved-device')?.textContent).toContain('AA:BB:CC:DD:EE:01');
-    expect(el.textContent).toContain('Manuell getrennt');
-    expect(connection.connect).not.toHaveBeenCalled(); expect(scanner.start).not.toHaveBeenCalled();
-    (el.querySelector('.connect-saved') as HTMLButtonElement).click(); await flush(); fixture.detectChanges();
-    expect(connection.connect).toHaveBeenCalledExactlyOnceWith('AA:BB:CC:DD:EE:01');
-    expect(journal.run).not.toHaveBeenCalled();
-  });
-
-  it('uses the explicit disconnect/forget actions and can forget while already disconnected',async()=>{
-    connection.binding.set({version:1,deviceId,bleAddress:'AA:BB:CC:DD:EE:01',connectionEnabled:true});
-    const {fixture,el}=open();
-    (el.querySelector('.disconnect') as HTMLButtonElement).click(); await flush(); fixture.detectChanges();
-    expect(connection.disconnectByUser).toHaveBeenCalledOnce(); expect(connection.binding()?.connectionEnabled).toBe(false);
-    expect(el.querySelector('.forget')).not.toBeNull();
-    (el.querySelector('.forget') as HTMLButtonElement).click(); await flush(); fixture.detectChanges();
-    expect(connection.forgetDevice).toHaveBeenCalledOnce(); expect(connection.binding()).toBeNull();
-    expect(el.querySelector('.saved-device')).toBeNull(); expect(el.querySelector('.forget')).toBeNull();
-    expect(connection.connect).not.toHaveBeenCalled(); expect(journal.run).not.toHaveBeenCalled();
-  });
-
-  it('keeps forgetting disabled during a journal download and reports a failed removal',async()=>{
-    connection.binding.set({version:1,deviceId,bleAddress:'AA:BB:CC:DD:EE:01',connectionEnabled:false});
-    const {fixture,el}=open(); journal.running.set(true); fixture.detectChanges();
-    const forget=el.querySelector('.forget') as HTMLButtonElement;
-    expect(forget.disabled).toBe(true); forget.click(); expect(connection.forgetDevice).not.toHaveBeenCalled();
-    journal.running.set(false); connection.forgetDevice.mockRejectedValueOnce(new Error('BLE binding storage could not be removed'));
-    fixture.detectChanges(); forget.click(); await flush(); fixture.detectChanges();
-    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Gerätebindung oder Verbindungsabsicht');
-    expect(el.querySelector('.saved-device')).not.toBeNull();
-  });
-
+  }
 });
-
 
 describe('DeviceDiscovery shared journal DI',()=>{
   it('uses the route connection, scanner and inherited application storage/history',async()=>{

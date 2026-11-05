@@ -1,35 +1,28 @@
-﻿<main class="dashboard" [class.android]="android">
+﻿<main
+  class="dashboard"
+>
   <header>
     <p class="eyebrow">RAUMLUFT IM BLICK</p>
     <h1>Lüftlotse</h1>
-    @if (android) { <span class="badge">Sensor</span> }
   </header>
   <div class="dashboard-columns">
-  <div class="sensor-column">
-  <section [class]="'reading ' + status().color" aria-labelledby="co2-label">
-    <h2 id="co2-label">CO₂-Konzentration</h2>
-    <p class="measurement"><strong>{{ source.current()?.ppm ?? '—' }}</strong><span>ppm</span></p>
-    <p class="status"><span class="dot" aria-hidden="true"></span>{{ status().label }}</p>
-    <p class="hint">{{ status().hint }}</p>
-  </section>
+    <div class="sensor-column">
+      <section
+        [class]="'reading ' + status().color"
+        aria-labelledby="co2-label"
+      >
+        <h2 id="co2-label">CO₂-Konzentration</h2>
+        <p class="measurement"><strong>{{ source.current()?.ppm ?? '—' }}</strong><span>ppm</span></p>
+        <p class="status"><span
+            class="dot"
+            aria-hidden="true"
+          ></span>{{ status().label }}</p>
+        <p class="hint">{{ status().hint }}</p>
+      </section>
+    </div>
+    <div class="history-column">
+      <app-device-discovery />
+      <app-server-history />
+    </div>
   </div>
-  <div class="history-column">
-  <app-device-discovery />
-  @if (android) {
-  <button type="button" class="history-link" (click)="toggleHistory()" [attr.aria-expanded]="history.visible()" aria-controls="air-monitor-history">
-    {{ history.visible() ? 'Verlauf ausblenden' : 'Verlauf anzeigen' }}
-  </button>
-  <div id="air-monitor-history" [hidden]="!history.visible()">
-    @if (historyCreated()) { <app-co2-chart /> }
-  </div>
-  }
-  @if (android) { <app-synchronization /> }
-  <app-server-history />
-  </div>
-  </div>
-  @if (android) {
-  <footer>
-    <p>Unter 1000 ppm: akzeptabel. 1000–1999 ppm: bitte lüften. Ab 2000 ppm: hoher CO₂-Wert, bitte lüften.</p>
-  </footer>
-  }
 </main>

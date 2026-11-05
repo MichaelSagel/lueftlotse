@@ -19,7 +19,6 @@ import { AirMonitorPage } from './air-monitor-page';
     fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('h1')?.textContent).toBe('Lüftlotse');
-    expect(element.querySelector('main')!.classList.contains('android')).toBe(false);
     expect(element.querySelector('.badge')).toBeNull();
     expect(element.querySelector('app-synchronization')).toBeNull();
     expect(element.textContent).not.toContain('Synchronisierung');
@@ -29,18 +28,6 @@ import { AirMonitorPage } from './air-monitor-page';
     expect(element.querySelector('.source-picker, input[type="radio"], .simulation-toggle, .prototype-warning')).toBeNull();
     expect(element.textContent).not.toMatch(/Simulator|Simulation|Prototyp-Warnung|Demo-Schwellen/);
     expect(element.querySelector('footer')).toBeNull();
-    fixture.destroy();
-  });
-
-  it('preserves the badge and manual synchronization in the Android UI', () => {
-    TestBed.overrideComponent(AirMonitorPage, { add: { providers: [{ provide: ANDROID_BLE, useValue: true }] } });
-    const fixture = TestBed.createComponent(AirMonitorPage);
-    fixture.detectChanges();
-    const element = fixture.nativeElement as HTMLElement;
-    expect(element.querySelector('main')!.classList.contains('android')).toBe(true);
-    expect(element.querySelector('.badge')?.textContent).toBe('Sensor');
-    expect(element.querySelector('app-synchronization')).not.toBeNull();
-    expect(element.querySelector('footer')).not.toBeNull();
     fixture.destroy();
   });
 
@@ -60,24 +47,14 @@ import { AirMonitorPage } from './air-monitor-page';
     await TestBed.inject(Co2History).whenSettled(); fixture.destroy();
   });
 
-  it('preserves Android access to local history', async () => {
-    TestBed.overrideComponent(AirMonitorPage, { add: { providers: [{ provide: ANDROID_BLE, useValue: true }] } });
-    const source = TestBed.inject(CO2_SOURCE);
-    const start = vi.spyOn(source, 'start');
-    const fixture = TestBed.createComponent(AirMonitorPage);
-    fixture.detectChanges();
+  it.each([false, true])('uses the same simplified page with Android platform flag %s', async android => {
+    TestBed.overrideComponent(AirMonitorPage, { add: { providers: [{ provide: ANDROID_BLE, useValue: android }] } });
+    const fixture = TestBed.createComponent(AirMonitorPage); fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;
-    const button = element.querySelector<HTMLButtonElement>('.history-link')!;
-    expect(element.querySelector('app-co2-chart')).toBeNull();
-    button.click();
-    fixture.detectChanges();
-    expect(element.querySelector('app-co2-chart')).not.toBeNull();
-    expect(button.getAttribute('aria-expanded')).toBe('true');
-    button.click();
-    fixture.detectChanges();
-    expect(button.getAttribute('aria-expanded')).toBe('false');
-    expect(source.state().status).toBe('stopped');
-    expect(start).not.toHaveBeenCalled();
+    expect(element.querySelector('.badge, footer, .history-link, #air-monitor-history, app-co2-chart, app-synchronization')).toBeNull();
+    expect(element.querySelector<HTMLElement>('#server-history')!.hidden).toBe(false);
+    expect(element.querySelector('app-server-history button')!.textContent).toBe('Verlauf anzeigen');
+    expect(TestBed.inject(CO2_SOURCE).state().status).toBe('stopped');
     expect(TestBed.inject(Co2Simulator, null)).toBeNull();
     await TestBed.inject(Co2History).whenSettled(); fixture.destroy();
   });

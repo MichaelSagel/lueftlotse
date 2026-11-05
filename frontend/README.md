@@ -15,13 +15,21 @@ The German labels are **CO₂-Wert akzeptabel** below 1000 ppm, **Bitte lüften*
 at 1000–1999 ppm, and **Hoher CO₂-Wert** with **Bitte lüften** from 2000 ppm.
 These display thresholds do not create Android notifications.
 
-Sensor preview is only the current reading: it does not enter IndexedDB, the
-chart/history or HTTP synchronization. **Journalmessungen herunterladen** remains
-a separate manual operation for persistent journal records. Existing history,
-including earlier simulator records, remains available for viewing and manual
-synchronization. The page and DeviceDiscovery share the same route-scoped BLE
-session. On Android the native service keeps this connection when discovery is
-collapsed, the app is backgrounded or the screen is locked. Returning to the UI
+Browser and Android now share the simplified single-column UI at every screen
+width (maximum 440 CSS pixels, centered). The only permanent connection action
+is **Sensor auswählen** / **Trennen**. There is no Sensor badge, local-history
+chart/disclosure, manual synchronization block, journal-download button or extra
+threshold footer. Existing local storage, journal and HTTP synchronization
+implementations remain available internally and are not rewritten by this UI change.
+
+Browser LIVE_SAMPLE records are saved in IndexedDB and automatically uploaded;
+MeasuredAt is browser reception time. Android continues to use its existing
+native storage/journal paths; sharing the UI does not add browser persistence
+to NativeBleSession. Only server history is shown in the shared UI.
+
+The page and DeviceDiscovery share the same route-scoped BLE
+session. On Android the native service keeps this connection when the device selector is
+closed, the app is backgrounded or the screen is locked. Returning to the UI
 restores the last valid sample with its original age and remaining 15-second
 lifetime; stale data remains unavailable. Automatic connection/reconnect is not
 implemented. Process death, force-stop, radio loss and OEM power management can
@@ -33,7 +41,10 @@ still end the connection; a foreground service is not an unlimited-execution gua
 GET /api/measurements using the existing API address configuration. Local datetime
 inputs are sent as UTC; the table displays local time. The period is [from, to),
 and **Weitere laden** uses nextCursor (50 rows per page). The UI filters only by
-period and displays Zeit, CO₂ and Quelle in a table fitted to the card. Geräte-ID
+period and displays only Zeit and CO₂ (ppm) in two centered 50/50 columns.
+Filters **Von** / **Bis** are always visible; **Verlauf anzeigen** loads the period.
+Header clicks switch time/ppm sort directions for the whole period and reset the
+cursor. The active header has an arrow and aria-sort; newest measurements come first. Geräte-ID
 and Segment are not displayed; the API DTO and optional device filter remain unchanged.
 Changing filters clears all pages and invalidates pending replies. Server rows
 exist only in memory: no IndexedDB import, local-history merge or backend write.
@@ -45,12 +56,17 @@ the Lüftlotse service UUID filter. Use HTTPS or localhost with Web Bluetooth
 available. Cancelling the chooser leaves the session unchanged. The browser uses
 WebBluetoothAdapter and BrowserBleSession over the existing BleConnection protocol;
 its binding exists only in memory and its scan barrier is empty. **Trennen** closes
-the connection. Browser journal download is unavailable; LIVE_SAMPLE is never
-stored or uploaded. The existing 15-second freshness timeout remains active.
+the connection. Browser journal download is unavailable; received LIVE_SAMPLE values are saved locally and uploaded automatically. The existing 15-second freshness timeout remains active.
 Switching tabs preserves the browser connection. Returning checks the original
 sample receipt age even when background timers were throttled; an expired value
 stays unavailable until a new valid LIVE_SAMPLE arrives. This is not a background-service guarantee.
 Android continues to use NativeBleSession and its native binding repository.
+The shared connection action opens a temporary modal using the existing BleScanner;
+it does not enable the guarded plugin's requestDevice API or open another GATT owner.
+Selecting a device stops scanning before the existing session connects. Cancelling
+stops scanning; a saved device can be selected explicitly. Changing the saved device
+still requires the explicit **Gerät vergessen** action inside this selector. Native
+permissions and foreground-service ownership are unchanged.
 
 The page's Co2Monitor, DeviceDiscovery and BleJournalSync consume `BLE_SESSION`.
 On Android the route selects the same `NativeBleSession` instance for all three:
@@ -187,8 +203,9 @@ Hardware checks still needed in the Android app with compatible firmware:
 2. Connect a device: the value stays — until a NEW sensor sample appears.
 3. Interrupt notifications for 15 seconds or disconnect: the reading clears and
    unavailability is explicit. Reconnect waits for new data.
-4. With journal-capable firmware, download journal records manually while viewing
-   Sensor. Only canonical journal records enter history/backend, not preview.
+4. Native journal persistence remains a separate technical path, covered by the
+   coordinator integration tests; the simplified UI has no journal-download action.
+   Browser notifications are saved and uploaded independently.
 
 See [BLE implementation notes](src/app/features/air-monitor/ble-protocol/README.md)
 for session validation, timer and persistence boundaries. Browser tests use a fake
@@ -265,14 +282,15 @@ API base URLs are configured in
 The browser uses `/api`. Native release builds have no configured server (`nativeBaseUrl: null`)
 and disable synchronization; the phone's localhost is not the development computer.
 
-Open **Synchronisierung** and choose **Jetzt synchronisieren** to send pending
+The existing Co2Sync service can send pending
 measurements, grouped by device and source, with at most 100 per request.
 The run uses a fixed local key boundary so newly collected measurements wait for
 the next manual run. Confirmed packets are marked synced in IndexedDB without
 deleting history. Lost or invalid responses leave the packet pending; a later
 manual retry sends the same measurement IDs and accepts server duplicates.
-Errors stop the run; earlier confirmed packets remain synced. There are no
-automatic retries. IndexedDB v3 adds a sync-status index while retaining v1/v2
+Errors stop the run; earlier confirmed packets remain synced. These internal
+runs have no retry loop of their own; BrowserBleSession separately schedules
+automatic sensor uploads and retries. IndexedDB v3 adds a sync-status index while retaining v1/v2
 history, primary keys, assigned IDs, metadata migration progress and simulator identity.
 
 ## Additional Resources
@@ -301,7 +319,7 @@ adb -s <serial> reverse tcp:5045 tcp:5045
 adb -s <serial> reverse --list
 ```
 
-Install the debug APK manually, then use **Synchronisierung**. The app calls
+Install the debug APK manually. The simplified UI has no manual synchronization control; the existing native HTTP transport can be verified through integration tests. The app calls
 `http://127.0.0.1:5045/api` through USB with native CapacitorHttp; Angular's dev
 server, LAN exposure and CORS changes are unnecessary. Disconnecting USB can
 lose a response: pending measurements keep their IDs and can be retried manually.
