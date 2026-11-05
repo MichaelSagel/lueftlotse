@@ -1,12 +1,33 @@
 import { DOCUMENT } from '@angular/common';
-import { DestroyRef, Injectable, InjectionToken, inject, signal } from '@angular/core';
+import {
+  DestroyRef,
+  Injectable,
+  InjectionToken,
+  inject,
+  signal
+} from '@angular/core';
 import { Subject } from 'rxjs';
-import { decodeInfo, Message, supportsLiveSample } from '../ble-protocol/codec';
-import { FragmentAssembler, fragmentMessage } from '../ble-protocol/fragments';
+import {
+  decodeInfo,
+  Message,
+  supportsLiveSample
+} from '../ble-protocol/codec';
+import {
+  FragmentAssembler,
+  fragmentMessage
+} from '../ble-protocol/fragments';
 import { BLE_ADAPTER } from './ble-adapter';
 import { BleScanner } from './ble-scanner';
 import { BleBindingStore } from './ble-binding';
-import { BleCommandError, BleJournalLease, BleSession, BleSessionClient, BleSessionClosedError, BleStatus, PreviewEvent } from './ble-session';
+import {
+  BleCommandError,
+  BleJournalLease,
+  BleSession,
+  BleSessionClient,
+  BleSessionClosedError,
+  BleStatus,
+  PreviewEvent
+} from './ble-session';
 import { JournalLease } from './ble-journal-lease';
 
 export const BLE_SCAN_BARRIER = new InjectionToken<Pick<BleScanner, 'stop'>>('BLE_SCAN_BARRIER', { providedIn: 'root', factory: () => inject(BleScanner) });
@@ -14,7 +35,7 @@ export const BLE_CONNECTION_BINDING = new InjectionToken<Pick<BleBindingStore, '
 
 type Status = BleStatus;
 type Info = ReturnType<typeof decodeInfo>;
-type JournalCommand = Extract<Message, {type: 1 | 3 | 4}>;
+type JournalCommand = Extract<Message, { type: 1 | 3 | 4 }>;
 interface Request {
   types: readonly number[];
   resolve: (message: Message) => void;
@@ -70,7 +91,7 @@ export class BleConnection implements BleSession {
   private readonly background = () => this.visibilityChanged(this.document.hidden);
 
   protected visibilityChanged(hidden: boolean): void {
-    if (hidden) void this.disconnect().catch(() => {});
+    if (hidden) void this.disconnect().catch(() => { });
   }
   protected previewExpired(): void { this.preview.next({ kind: 'unavailable', reason: 'stale' }); }
 
@@ -81,7 +102,7 @@ export class BleConnection implements BleSession {
       for (const client of this.clients) client.abort(new Error('BLE client destroyed'));
       this.clients.clear();
       this.document.removeEventListener('visibilitychange', this.background);
-      void this.disconnect().catch(() => {});
+      void this.disconnect().catch(() => { });
       this.preview.complete();
     });
   }
@@ -90,11 +111,13 @@ export class BleConnection implements BleSession {
     if (!this.adapter.available()) throw new Error('BLE is available only in the Android app');
     if (this.destroyed || this.document.hidden || this.session || this.bindingChanges || !id) throw new Error('BLE session unavailable');
     signal?.throwIfAborted();
-    const session: Session = { id, generation: (++this.generation).toString(), abort: new AbortController(), assembler: new FragmentAssembler('events'),
-      pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, statusTail: Promise.resolve(), requests: new Map(), controlTail: Promise.resolve(), listeners: new Set(), exchanges: 0 };
+    const session: Session = {
+      id, generation: (++this.generation).toString(), abort: new AbortController(), assembler: new FragmentAssembler('events'),
+      pending: new Set(), connecting: false, subscribed: false, nextId: 0, queued: 0, statusTail: Promise.resolve(), requests: new Map(), controlTail: Promise.resolve(), listeners: new Set(), exchanges: 0
+    };
     this.session = session; this.info.set(null); this.status.set(null); this.error.set(null); this.state.set('connecting');
     this.preview.next({ kind: 'unavailable' });
-    const cancel = () => { void this.close(session, signal?.reason ?? new Error('Cancelled')).catch(() => {}); };
+    const cancel = () => { void this.close(session, signal?.reason ?? new Error('Cancelled')).catch(() => { }); };
     signal?.addEventListener('abort', cancel, { once: true });
     try {
       this.assertCurrent(session); this.phase.set('scan-stop');
@@ -105,7 +128,7 @@ export class BleConnection implements BleSession {
       this.assertCurrent(session); this.phase.set('connect');
       session.connecting = true;
       await this.operation(session, () => this.adapter.connect(id, () => {
-        if (this.current(session)) void this.close(session, new BleSessionClosedError('BLE disconnected')).catch(() => {});
+        if (this.current(session)) void this.close(session, new BleSessionClosedError('BLE disconnected')).catch(() => { });
       }), 10000);
       this.assertCurrent(session); this.phase.set('info');
       const value = await this.operation(session, () => this.adapter.readInfo(id));
@@ -125,7 +148,7 @@ export class BleConnection implements BleSession {
       this.phase.set('ready'); this.state.set('ready');
       this.preview.next({ kind: 'ready' }); return status;
     } catch (error) {
-      void this.close(session, error).catch(() => {});
+      void this.close(session, error).catch(() => { });
       throw error;
     } finally { signal?.removeEventListener('abort', cancel); }
   }
@@ -231,39 +254,39 @@ export class BleConnection implements BleSession {
   private enqueueStatus(session: Session): Promise<Status> {
     if (session.queued >= 4) return Promise.reject(new Error('BLE command queue full'));
     session.queued++;
-    const result = session.statusTail.then(() => this.exchange(session, {type: 1}, [0x80], session.abort.signal) as Promise<Status>);
-    session.statusTail = result.then(() => {}, error => { void this.close(session, error).catch(() => {}); });
+    const result = session.statusTail.then(() => this.exchange(session, { type: 1 }, [0x80], session.abort.signal) as Promise<Status>);
+    session.statusTail = result.then(() => { }, error => { void this.close(session, error).catch(() => { }); });
     return result.finally(() => { session.queued--; });
   }
 
   /** Control serialization ends with the last write. Response promises live in requests. */
   private exchange(session: Session, command: JournalCommand, types: readonly number[], signal: AbortSignal, prepared?: (id: number) => void): Promise<Message> {
-    try { this.assertCurrent(session); signal.throwIfAborted(); } catch(error) { return Promise.reject(error); }
+    try { this.assertCurrent(session); signal.throwIfAborted(); } catch (error) { return Promise.reject(error); }
     if (session.exchanges >= 4) return Promise.reject(new Error('BLE command queue full'));
     if (session.nextId > 65534) {
       const error = new Error('BLE message IDs exhausted; reconnect required');
-      void this.close(session, error).catch(() => {}); return Promise.reject(error);
+      void this.close(session, error).catch(() => { }); return Promise.reject(error);
     }
     session.exchanges++;
     const id = session.nextId++;
     let request!: Request;
-    const response = new Promise<Message>((resolve,reject) => { request = {types,resolve,reject}; });
-    session.requests.set(id,request); void response.catch(() => {});
+    const response = new Promise<Message>((resolve, reject) => { request = { types, resolve, reject }; });
+    session.requests.set(id, request); void response.catch(() => { });
     const abort = () => request.reject(signal.reason);
-    signal.addEventListener('abort',abort,{once:true});
+    signal.addEventListener('abort', abort, { once: true });
     const write = session.controlTail.then(async () => {
       this.assertCurrent(session); signal.throwIfAborted(); prepared?.(id);
-      for (const frame of fragmentMessage(command,id,'control')) {
+      for (const frame of fragmentMessage(command, id, 'control')) {
         signal.throwIfAborted();
         await this.operation(session, () => {
           // A queued fragment must recheck the lease immediately before touching GATT.
           signal.throwIfAborted();
-          return this.adapter.write(session.id,new DataView(frame.buffer,frame.byteOffset,frame.byteLength));
+          return this.adapter.write(session.id, new DataView(frame.buffer, frame.byteOffset, frame.byteLength));
         });
       }
-      if (session.requests.has(id)) request.timer = setTimeout(() => request.reject(new Error('STATUS/command timed out')),5000);
+      if (session.requests.has(id)) request.timer = setTimeout(() => request.reject(new Error('STATUS/command timed out')), 5000);
     });
-    session.controlTail = write.then(() => {}, () => {});
+    session.controlTail = write.then(() => { }, () => { });
     void write.catch(error => request.reject(error));
     return (async () => {
       try {
@@ -271,7 +294,7 @@ export class BleConnection implements BleSession {
         const result = await response;
         await write; this.assertCurrent(session); signal.throwIfAborted(); return result;
       } finally {
-        session.exchanges--; clearTimeout(request.timer); session.requests.delete(id); signal.removeEventListener('abort',abort);
+        session.exchanges--; clearTimeout(request.timer); session.requests.delete(id); signal.removeEventListener('abort', abort);
       }
     })();
   }
@@ -280,7 +303,7 @@ export class BleConnection implements BleSession {
     if (!this.current(session)) return;
     try {
       if (value.byteLength < 7 || value.byteLength > 20) throw new Error('Invalid Events ATT length');
-      const decoded = session.assembler.push(new Uint8Array(value.buffer,value.byteOffset,value.byteLength).slice());
+      const decoded = session.assembler.push(new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
       if (!decoded) return;
       const message = decoded.message;
       if (message.type === 0x8a) {
@@ -305,7 +328,7 @@ export class BleConnection implements BleSession {
       } else if (request && request.types.includes(message.type)) {
         clearTimeout(request.timer); request.resolve(message); session.requests.delete(('requestId' in message) ? message.requestId : -1);
       }
-    } catch(error) { void this.close(session,error).catch(() => {}); }
+    } catch (error) { void this.close(session, error).catch(() => { }); }
   }
 
   private close(session: Session, reason?: unknown): Promise<void> {

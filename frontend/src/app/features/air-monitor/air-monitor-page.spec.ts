@@ -23,6 +23,8 @@ import { AirMonitorPage } from './air-monitor-page';
     expect(element.querySelector('app-synchronization')).toBeNull();
     expect(element.textContent).not.toContain('Synchronisierung');
     expect(element.querySelector('.measurement strong')?.textContent).toBe('—');
+    expect(element.querySelector('.measurement span')?.textContent).toBe('ppm');
+    expect(element.querySelector('.status')?.textContent).toBe('Sensor nicht verfügbar');
     expect(element.querySelector('.reading')?.classList.contains('unavailable')).toBe(true);
     expect(element.textContent).toContain('Sensor nicht verfügbar');
     expect(element.querySelector('.source-picker, input[type="radio"], .simulation-toggle, .prototype-warning')).toBeNull();

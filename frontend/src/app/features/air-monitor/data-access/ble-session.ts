@@ -1,19 +1,47 @@
-import { InjectionToken, Signal } from '@angular/core';
+import {
+  InjectionToken, Signal
+} from '@angular/core';
 import { Observable } from 'rxjs';
-import { Info, Message } from '../ble-protocol/codec';
-import { BatchAck, BatchMessage } from '../ble-protocol/batch-receiver';
+import {
+  Info, Message
+} from '../ble-protocol/codec';
+import {
+  BatchAck, BatchMessage
+} from '../ble-protocol/batch-receiver';
 import { BleBinding } from './ble-binding-storage';
 
 export type BleStatus = Extract<Message, { type: 0x80 }>;
 export type LiveSample = Extract<Message, { type: 0x8a }>;
-export type PreviewEvent = { kind: 'ready' } | { kind: 'unavailable'; reason?: 'stale' | 'error' } |
-  { kind: 'sample'; sample: LiveSample; ageMs?: number };
-export type BleState = 'idle' | 'connecting' | 'ready' | 'closing' | 'error';
-export type BlePhase = Exclude<BleState, 'connecting'> | 'scan-stop' | 'migrate' | 'permissions' | 'initialize' | 'connect' | 'info' | 'subscribe' | 'status';
+export type PreviewEvent = {
+  kind: 'ready'
+}
+  | {
+    kind: 'unavailable';
+    reason?: 'stale' | 'error'
+  } |
+{
+  kind: 'sample';
+  sample: LiveSample;
+  ageMs?: number
+};
+export type BleState = 'idle'
+  | 'connecting'
+  | 'ready'
+  | 'closing'
+  | 'error';
+export type BlePhase = Exclude<BleState, 'connecting'>
+  | 'scan-stop'
+  | 'migrate'
+  | 'permissions'
+  | 'initialize'
+  | 'connect'
+  | 'info'
+  | 'subscribe'
+  | 'status';
 export class BleCommandError extends Error {
   constructor(readonly code: number) { super('BLE protocol error ' + code); }
 }
-export class BleSessionClosedError extends Error {}
+export class BleSessionClosedError extends Error { }
 export interface JournalToken {
   readonly generation: string;
   readonly clientId: string;
@@ -21,9 +49,18 @@ export interface JournalToken {
 }
 export interface BatchToken extends JournalToken { readonly ticketId: string; }
 export type JournalFetch =
-  | { readonly kind: 'batch'; readonly token: BatchToken; readonly messages: readonly BatchMessage[] }
-  | { readonly kind: 'status'; readonly status: BleStatus }
-  | { readonly kind: 'time-pending' };
+  | {
+    readonly kind: 'batch';
+    readonly token: BatchToken;
+    readonly messages: readonly BatchMessage[]
+  }
+  | {
+    readonly kind: 'status';
+    readonly status: BleStatus
+  }
+  | {
+    readonly kind: 'time-pending'
+  };
 
 /** One exclusive download. No raw writes or independently callable ACK escape this boundary. */
 export interface BleJournalLease {
@@ -31,9 +68,16 @@ export interface BleJournalLease {
   readonly info: Info;
   readonly signal: AbortSignal;
   getStatus(): Promise<BleStatus>;
-  fetch(afterSequence: bigint, limit: number): Promise<JournalFetch>;
+  fetch(
+    afterSequence: bigint,
+    limit: number
+  ): Promise<JournalFetch>;
   /** commit must resolve only after atomic storage transaction completion and honor signal. */
-  commitAndAcknowledge(token: BatchToken, ack: BatchAck, commit: () => Promise<void>): Promise<void>;
+  commitAndAcknowledge(
+    token: BatchToken,
+    ack: BatchAck,
+    commit: () => Promise<void>
+  ): Promise<void>;
   /** Revocation rejects pending work; unsafe cancellation closes the captured connection. */
   revoke(): void;
   close(): Promise<void>;

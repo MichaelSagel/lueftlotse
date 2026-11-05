@@ -1,6 +1,4 @@
-﻿<main
-  class="dashboard"
->
+﻿<main class="dashboard">
   <header>
     <p class="eyebrow">RAUMLUFT IM BLICK</p>
     <h1>Lüftlotse</h1>
@@ -12,8 +10,12 @@
         aria-labelledby="co2-label"
       >
         <h2 id="co2-label">CO₂-Konzentration</h2>
-        <p class="measurement"><strong>{{ source.current()?.ppm ?? '—' }}</strong><span>ppm</span></p>
-        <p class="status"><span
+        <p class="measurement">
+          <strong>{{ source.current()?.ppm ?? '—' }}</strong>
+          <span>ppm</span>
+        </p>
+        <p class="status">
+          <span
             class="dot"
             aria-hidden="true"
           ></span>{{ status().label }}</p>

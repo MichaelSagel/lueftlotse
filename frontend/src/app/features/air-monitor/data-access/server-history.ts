@@ -1,5 +1,13 @@
-import { DestroyRef, Injectable, inject, signal } from '@angular/core';
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import {
+  DestroyRef,
+  Injectable,
+  inject,
+  signal
+} from '@angular/core';
+import {
+  Capacitor,
+  CapacitorHttp
+} from '@capacitor/core';
 import { MEASUREMENT_API_CONFIG } from './measurement-api.config';
 
 export interface ServerMeasurement {
@@ -9,7 +17,7 @@ export interface ServerMeasurement {
 export type HistorySort = 'time-desc' | 'time-asc' | 'ppm-desc' | 'ppm-asc';
 export interface ServerHistoryFilters { from: string; to: string; deviceId: string; sort?: HistorySort; }
 interface Page { items: ServerMeasurement[]; nextCursor: string | null; }
-class HistoryError extends Error {}
+class HistoryError extends Error { }
 
 /** Volatile server view. No storage, local history or BLE dependency. */
 @Injectable()
@@ -71,12 +79,12 @@ export class ServerHistory {
       if (!current()) return;
       if (abort.signal.aborted) throw new HistoryError('Die Anfrage hat zu lange gedauert. Bitte erneut versuchen.');
       if (!page || !Array.isArray(page.items) || page.items.length > 50 ||
-          (page.nextCursor !== null && (typeof page.nextCursor !== 'string' || !page.nextCursor)) ||
-          page.items.some(row => !row || typeof row.measurementId !== 'string' || typeof row.deviceId !== 'string' ||
-            typeof row.source !== 'string' || typeof row.segment !== 'string' ||
-            !Number.isInteger(row.ppm) || row.ppm < 1 || row.ppm > 100000 ||
-            typeof row.measuredAt !== 'string' || !Number.isFinite(Date.parse(row.measuredAt)) ||
-            typeof row.receivedAt !== 'string' || !Number.isFinite(Date.parse(row.receivedAt))))
+        (page.nextCursor !== null && (typeof page.nextCursor !== 'string' || !page.nextCursor)) ||
+        page.items.some(row => !row || typeof row.measurementId !== 'string' || typeof row.deviceId !== 'string' ||
+          typeof row.source !== 'string' || typeof row.segment !== 'string' ||
+          !Number.isInteger(row.ppm) || row.ppm < 1 || row.ppm > 100000 ||
+          typeof row.measuredAt !== 'string' || !Number.isFinite(Date.parse(row.measuredAt)) ||
+          typeof row.receivedAt !== 'string' || !Number.isFinite(Date.parse(row.receivedAt))))
         throw new HistoryError('Der Server hat eine ungültige Antwort geliefert.');
       this.rows.set(more ? [...this.rows(), ...page.items] : page.items);
       this.nextCursor.set(page.nextCursor); this.loaded.set(true);

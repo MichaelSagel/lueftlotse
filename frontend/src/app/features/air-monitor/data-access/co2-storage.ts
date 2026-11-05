@@ -1,16 +1,35 @@
-﻿import { decodeBody, encodeBody } from '../ble-protocol/codec';
+﻿import {
+  decodeBody,
+  encodeBody
+} from '../ble-protocol/codec';
 import { uuidBytes } from '../ble-protocol/binary';
 import type { LiveSample } from './ble-session';
 import { Injectable } from '@angular/core';
 import { HistoryEnvelope } from '../domain/history-envelope';
 import { HistoryContinuity } from '../domain/history-continuity';
 import { signal } from '@angular/core';
-import { prepareTerminalBatch, serviceRecordExpired, TerminalRecord, VerifiedBleBatch } from './ble-terminal-batch';
-import { BleCursorConflictError, BleImportConflictError, BleImportResult, BleReadyBatch, prepareReadyBatch, sameSensorMeasurement } from './ble-ready-batch';
+import {
+  prepareTerminalBatch,
+  serviceRecordExpired,
+  TerminalRecord,
+  VerifiedBleBatch
+} from './ble-terminal-batch';
+import {
+  BleCursorConflictError,
+  BleImportConflictError,
+  BleImportResult,
+  BleReadyBatch,
+  prepareReadyBatch,
+  sameSensorMeasurement
+} from './ble-ready-batch';
 
 export interface Co2Measurement {
-  readonly time: number; readonly ppm: number; readonly segment: string;
-  readonly deviceId?: string; readonly source?: 'simulator' | 'sensor'; readonly sequence?: string;
+  readonly time: number;
+  readonly ppm: number;
+  readonly segment: string;
+  readonly deviceId?: string;
+  readonly source?: 'simulator' | 'sensor';
+  readonly sequence?: string;
 }
 /** History projections can still be read while legacy rows are being upgraded. */
 export interface StoredCo2Measurement extends Co2Measurement {
@@ -19,16 +38,42 @@ export interface StoredCo2Measurement extends Co2Measurement {
   readonly source: 'simulator' | 'sensor';
   readonly syncStatus: 'pending' | 'synced';
 }
-interface MetadataProgress { lastKey: number; complete: boolean; }
-export interface PendingMeasurement { key: number; measurement: StoredCo2Measurement; }
-export interface SyncSnapshot { pending: number; synced: number; maxKey: number; }
-export interface PageCursor { readonly time: number; readonly key: number; }
-export interface MeasurementPage { entries: Co2Measurement[]; next: PageCursor | null; }
-export interface TableSnapshot { count: number; maxKey: number; }
+interface MetadataProgress {
+  lastKey: number;
+  complete: boolean;
+}
+export interface PendingMeasurement {
+  key: number;
+  measurement: StoredCo2Measurement;
+}
+export interface SyncSnapshot {
+  pending: number;
+  synced: number;
+  maxKey: number;
+}
+export interface PageCursor {
+  readonly time: number;
+  readonly key: number;
+}
+export interface MeasurementPage {
+  entries: Co2Measurement[];
+  next: PageCursor | null;
+}
+export interface TableSnapshot {
+  count: number;
+  maxKey: number;
+}
 
-interface ClearState { revision: number; clearing: number; listeners: Set<() => void>; }
+interface ClearState {
+  revision: number;
+  clearing: number;
+  listeners: Set<() => void>;
+}
 const historyClears = new WeakMap<IDBFactory, ClearState>();
-const serviceStores = ['bleUndatable', 'bleGaps', 'bleReceipts'] as const;
+const serviceStores = [
+  'bleUndatable',
+  'bleGaps',
+  'bleReceipts'] as const;
 
 @Injectable()
 export class Co2Storage {
@@ -38,12 +83,21 @@ export class Co2Storage {
   private generation = 0;
   private clearState(): ClearState {
     let state = historyClears.get(indexedDB);
-    if (!state) { state = { revision: 0, clearing: 0, listeners: new Set() }; historyClears.set(indexedDB, state); }
+    if (!state) {
+      state = {
+        revision: 0,
+        clearing: 0,
+        listeners: new Set()
+      };
+      historyClears.set(indexedDB, state);
+    }
     return state;
   }
   get historyClearing(): boolean { return this.clearState().clearing > 0; }
   onHistoryCleared(listener: () => void): () => void {
-    const state = this.clearState(); state.listeners.add(listener); return () => state.listeners.delete(listener);
+    const state = this.clearState();
+    state.listeners.add(listener);
+    return () => state.listeners.delete(listener);
   }
   private open(): Promise<IDBDatabase> {
     if (!this.database) {
@@ -263,7 +317,11 @@ export class Co2Storage {
     });
   }
   /** Browser receipt time, never sensor UTC or uptime. Identity survives reconnect/reload. */
-  async saveLiveSample(deviceId: string, input: LiveSample, receivedAt: number): Promise<boolean> {
+  async saveLiveSample(
+    deviceId: string,
+    input: LiveSample,
+    receivedAt: number
+  ): Promise<boolean> {
     uuidBytes(deviceId);
     const sample = decodeBody(0x8a, encodeBody(input)) as LiveSample;
     if (!Number.isFinite(receivedAt) || !Number.isFinite(new Date(receivedAt).getTime())) throw new RangeError('Invalid receipt time');
@@ -388,7 +446,7 @@ export class Co2Storage {
         if (key <= afterKey) { cursor.continuePrimaryKey('pending', afterKey + 1); return; }
         const row = cursor.value as Partial<StoredCo2Measurement>;
         if (row.measurementId && row.deviceId && (row.source === 'simulator' || row.source === 'sensor') &&
-            typeof row.time === 'number' && typeof row.ppm === 'number' && typeof row.segment === 'string') {
+          typeof row.time === 'number' && typeof row.ppm === 'number' && typeof row.segment === 'string') {
           entries.push({ key, measurement: row as StoredCo2Measurement });
         }
         cursor.continue();
@@ -407,8 +465,8 @@ export class Co2Storage {
           const current = request.result as StoredCo2Measurement | undefined;
           const sent = entry.measurement;
           if (current?.syncStatus === 'pending' && current.measurementId === sent.measurementId &&
-              current.deviceId === sent.deviceId && current.source === sent.source && current.time === sent.time &&
-              current.ppm === sent.ppm && current.segment === sent.segment) {
+            current.deviceId === sent.deviceId && current.source === sent.source && current.time === sent.time &&
+            current.ppm === sent.ppm && current.segment === sent.segment) {
             store.put({ ...current, syncStatus: 'synced' } satisfies StoredCo2Measurement, entry.key);
           }
         };

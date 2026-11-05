@@ -49,7 +49,8 @@ public static partial class MeasurementBatchEndpoint
         try
         {
             batch = JsonSerializer.Deserialize<MeasurementBatchRequest>(
-                body.GetBuffer().AsSpan(0, (int)body.Length), JsonOptions);
+                body.GetBuffer().AsSpan(0, (int)body.Length), JsonOptions
+            );
         }
         catch (JsonException)
         {
@@ -124,8 +125,13 @@ public static partial class MeasurementBatchEndpoint
             if (utcTime.Ticks % 10 != 0) errors[$"{field}.measuredAt"] = ["Timestamp precision must not exceed microseconds."];
             result.Add(new Measurement
             {
-                MeasurementId = entry.MeasurementId, DeviceId = batch.DeviceId, Source = batch.Source!,
-                MeasuredAt = utcTime, Ppm = entry.Ppm ?? 0, Segment = entry.Segment!, ReceivedAt = now
+                MeasurementId = entry.MeasurementId,
+                DeviceId = batch.DeviceId,
+                Source = batch.Source!,
+                MeasuredAt = utcTime,
+                Ppm = entry.Ppm ?? 0,
+                Segment = entry.Segment!,
+                ReceivedAt = now
             });
         }
         return result;

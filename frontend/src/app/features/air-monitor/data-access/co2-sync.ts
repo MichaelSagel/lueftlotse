@@ -1,6 +1,18 @@
-import { DestroyRef, Injectable, inject, signal } from '@angular/core';
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { Co2Storage, PendingMeasurement, SyncSnapshot } from './co2-storage';
+import {
+  DestroyRef,
+  Injectable,
+  inject,
+  signal
+} from '@angular/core';
+import {
+  Capacitor,
+  CapacitorHttp
+} from '@capacitor/core';
+import {
+  Co2Storage,
+  PendingMeasurement,
+  SyncSnapshot
+} from './co2-storage';
 import { MEASUREMENT_API_CONFIG } from './measurement-api.config';
 
 class ServerError extends Error { constructor(readonly status: number) { super('Batch rejected'); } }
@@ -28,7 +40,7 @@ export class Co2Sync {
     try { await this.readCounts(); }
     catch (error) {
       this.countsAvailable.set(false);
-      this.error.set(`Lokaler Synchronisierungsstand nicht verfügbar: ${error instanceof Error ? error.message : String(error)}`);
+      this.error.set(`Lokaler Synchronisierungsstand nicht verfÃ¼gbar: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   private async readCounts(): Promise<SyncSnapshot> {
@@ -68,7 +80,10 @@ export class Co2Sync {
           const body = {
             deviceId: first.deviceId, source: first.source,
             measurements: group.map(({ measurement: row }) => ({
-              measurementId: row.measurementId, measuredAt: new Date(row.time).toISOString(), ppm: row.ppm, segment: row.segment,
+              measurementId: row.measurementId,
+              measuredAt: new Date(row.time).toISOString(),
+              ppm: row.ppm,
+              segment: row.segment,
             })),
           };
           const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -80,9 +95,17 @@ export class Co2Sync {
               method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
             });
             if (response.status !== 200) throw new ServerError(response.status);
-            const ack = ('data' in response ? response.data : await response.json()) as { received?: number; inserted?: number; duplicates?: number } | null;
+            const ack = (
+              'data' in response
+              ? response.data
+              : await response.json()
+            ) as {
+              received?: number;
+              inserted?: number;
+              duplicates?: number
+            } | null;
             if (!ack || ack.received !== group.length || !Number.isInteger(ack.inserted) || !Number.isInteger(ack.duplicates) ||
-                ack.inserted! < 0 || ack.duplicates! < 0 || ack.inserted! + ack.duplicates! !== ack.received) {
+              ack.inserted! < 0 || ack.duplicates! < 0 || ack.inserted! + ack.duplicates! !== ack.received) {
               throw new Error('Invalid acknowledgement');
             }
             if (controller.signal.aborted) throw new Error('Cancelled');

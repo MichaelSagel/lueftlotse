@@ -1,6 +1,11 @@
 import { Co2Storage } from './co2-storage';
 import { Co2Sync } from './co2-sync';
-import { DestroyRef, Injectable, inject, signal } from '@angular/core';
+import {
+  DestroyRef,
+  Injectable,
+  inject,
+  signal
+} from '@angular/core';
 import { BleConnection } from './ble-connection';
 import { BleSessionClient } from './ble-session';
 
@@ -16,7 +21,9 @@ export class BrowserBleSession extends BleConnection {
   private receipt?: { monotonic: number; wall: number };
   constructor() {
     super();
-    const retry = setInterval(() => { void this.sync.synchronize(true); }, 30_000);
+    const retry = setInterval(
+      () => { void this.sync.synchronize(true); },
+      30_000);
     inject(DestroyRef).onDestroy(() => { this.disposed = true; clearInterval(retry); });
     const subscription = this.previewEvents.subscribe(event => {
       if (event.kind === 'sample') {
@@ -27,7 +34,7 @@ export class BrowserBleSession extends BleConnection {
             this.persistenceError.set(null);
             return this.disposed ? undefined : this.sync.synchronize(true);
           }).catch(() => this.persistenceError.set('Sensorwert konnte nicht lokal gespeichert werden.'));
-          this.settled = Promise.all([this.settled, saved]).then(() => {});
+          this.settled = Promise.all([this.settled, saved]).then(() => { });
         }
       }
       if (event.kind === 'sample' || event.kind === 'ready') {
@@ -40,7 +47,7 @@ export class BrowserBleSession extends BleConnection {
     // Timers may be throttled in a background tab. Check the original receipt on return.
     // Wall elapsed also covers platforms whose performance clock pauses during sleep.
     if (!hidden && this.state() === 'ready' && this.receipt &&
-        Math.max(performance.now() - this.receipt.monotonic, Date.now() - this.receipt.wall) >= 15000) {
+      Math.max(performance.now() - this.receipt.monotonic, Date.now() - this.receipt.wall) >= 15000) {
       this.previewExpired();
     }
   }
