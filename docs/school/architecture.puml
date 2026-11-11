@@ -14,6 +14,13 @@ package "Backend" {
   component "EF Core\nNpgsql-Provider" as EF
 }
 
+package "Android" {
+  component "Gemeinsame Angular-Oberfläche" as AndroidUI
+  component "Capacitor BleService\ngetLiveHistory / separater Lesethread" as NativeHistory
+  component "SensorBleService\nnative Schreibwarteschlange" as NativeWriter
+  database "SQLite live-samples-v1.db\nnoBackup-Verzeichnis" as NativeDB
+}
+
 database "PostgreSQL\nTabelle measurements" as PostgreSQL
 node "ESP32\nCO₂-Sensor" as ESP32
 
@@ -24,6 +31,10 @@ Angular --> LocalDB : LIVE_SAMPLE als sensor speichern\npending / synced verwalt
 Angular --> Bluetooth : Gerät auswählen / GATT verbinden
 Bluetooth --> ESP32 : BLE / GATT
 ESP32 ..> Angular : LIVE_SAMPLE über Web Bluetooth\naktueller CO₂-Wert
+ESP32 ..> NativeWriter : LIVE_SAMPLE über natives BLE
+NativeWriter --> NativeDB : sensor speichern\nZeit = Empfang am Telefon
+AndroidUI --> NativeHistory : Von / Bis, Sortierung, Cursor
+NativeHistory --> NativeDB : read-only SQL\nauch ohne BLE-Verbindung
 
 note bottom of Angular
   Serververlauf: GET-Antworten nur im Arbeitsspeicher,
@@ -38,7 +49,6 @@ note bottom of Bluetooth
   MeasuredAt = Empfangszeit im Browser.
   Ohne Verbindung verpasste Messungen werden
   nicht nachträglich wiederhergestellt.
-  Android ist von dieser Änderung nicht betroffen.
 end note
 
 note bottom of LocalDB

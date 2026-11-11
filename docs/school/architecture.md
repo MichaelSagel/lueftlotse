@@ -5,7 +5,7 @@ Komponentenebene. Die Angular-Oberfläche ist in TypeScript implementiert und
 kommuniziert über HTTP und JSON mit der ASP.NET-Core-API in C#.
 Das Backend greift mit EF Core und dem Npgsql-Provider auf PostgreSQL zu.
 
-Der separate Bereich **Serververlauf** liest gespeicherte Messungen mit
+Im Browser liest der Bereich **Verlauf anzeigen** gespeicherte Messungen mit
 `GET /api/measurements`. Zeitraum und Cursor begrenzen die Abfrage. Zeit und
 CO₂-Wert lassen sich serverseitig auf- oder absteigend über den gesamten
 gewählten Zeitraum sortieren; standardmäßig stehen neue Messungen oben.
@@ -19,7 +19,7 @@ mit ausstehendem Synchronisierungsstatus gespeichert und automatisch über
 speichern sie in PostgreSQL. Bei einem API-Ausfall bleiben die Daten ausstehend;
 erneute Übertragungen verwenden dieselben IDs und Daten.
 
-IndexedDB ist der lokale Speicher des Clients für die lokale Historie und ihren
+IndexedDB ist der lokale Speicher des Browser-Clients für die lokale Historie und ihren
 Synchronisierungsstand. PostgreSQL ist die serverseitige Datenbank. Beide sind
 getrennte Speicher; es gibt keine direkte Datenbank-zu-Datenbank-Verbindung.
 Die Übertragung erfolgt ausdrücklich durch den Client über die HTTP API.
@@ -30,4 +30,12 @@ die Anzeige und werden über den beschriebenen Speicher- und Übertragungspfad
 gesichert. `MeasuredAt` ist die Zeit des Empfangs im Browser, nicht Sensor-UTC
 oder Sensor-Uptime. Ohne Verbindung verpasste Messungen werden nicht
 wiederhergestellt; ein Journaldownload oder eine Lückennachlieferung findet
-im Browser nicht statt. Android ist von dieser Änderung nicht betroffen.
+im Browser nicht statt.
+
+Auf Android speichert der native BLE-Hintergrunddienst empfangene `LIVE_SAMPLE`
+in SQLite (`live-samples-v1.db` im noBackup-Verzeichnis). Die Zeit ist die
+Empfangszeit des Telefons. Dieselbe Oberfläche liest diese Daten über den
+Capacitor-Bridge `BleService.getLiveHistory`, auch nach dem Trennen und ohne
+laufenden BLE-Dienst. Zeitraum, Sortierung und stabile Cursor-Paginierung werden
+in SQLite verarbeitet; das Lesen erfolgt außerhalb des Hauptthreads und ohne
+Backend oder HTTP-Übertragung. Der Browser verwendet weiterhin die Serverhistorie.

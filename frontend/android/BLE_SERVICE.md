@@ -103,6 +103,7 @@ IO; first client attachment migrates/reads and polls, but never connects.
 | `requestPermissions()` | Visible Activity only; requests CONNECT on API 31+ and POST_NOTIFICATIONS on API 33+. Resolves state and never starts a service. |
 | `start({ bleAddress, expectedDeviceId? })` | Requires completed binding migration. Explicit MAC address; the persisted UUID is enforced, plus any explicit expectation. Returns starting state with runId; poll getState. New identity/address and enabled intent are saved only after STATUS. |
 | `getState()` | Returns a snapshot; no start, new GATT, subscription or persistence. |
+| `getLiveHistory({fromMs, toMs, sort?, pageSize, deviceId?, cursor?})` | Reads native SQLite on an independent worker, without a BLE run, permissions or binding migration. Calendar bounds are decimal millisecond strings, `[fromMs, toMs)`. Sort: `time-desc` (default), `time-asc`, `ppm-desc`, `ppm-asc`; pageSize 1–50. Returns `{items, nextCursor}`. |
 | `disconnect({ runId })` or `disconnect({ revision })` | Current-run token, or checked binding revision only when no run exists after process restart. Commits disabled intent before closing; storage failure still closes an existing run and rejects. Poll until cleanup completes. Stale tokens/revisions cannot stop a newer run. |
 | `getBinding()` | Confirmed repository snapshot; an IO/decode error rejects, never returns an empty binding. |
 | `migrateBinding({ binding })` | One-time import or explicit null; returns the existing snapshot after completion. See the migration coordinator contract. |
@@ -184,13 +185,55 @@ its queue barrier completes; it does not cancel accepted writes. Destroying the
 Activity/WebView does not own or shut down the queue. The last storage failure
 is logged and remains in `getState().liveStorageError` across subsequent reads,
 successful writes and new sessions within the process. Reading this field does
-not perform disk IO. There is no HTTP upload, history UI integration, reconnect,
+not perform disk IO. The shared Android history UI uses the read-only reader below.
+There is no HTTP upload, reconnect,
 automatic retry of failed receipts, retention pruning or gap recovery in this path.
 
 Commit is the durability boundary: process death before commit can lose an
 accepted in-memory receipt, and LIVE_SAMPLE has no durable delivery ACK/replay.
 Screen-off operation still depends on Android keeping the existing foreground
 connection alive. The existing journal cancellation rules above remain unchanged.
+
+### Reading history without a BLE service
+
+The same **Von**, **Bis**, **Verlauf anzeigen**, sortable Zeit/CO₂ headers and
+**Weitere laden** controls use `BleService.getLiveHistory` on Android. Browsers
+continue to use GET /api/measurements. Android renders the saved phone receipt
+time; neither sensor uptime nor page-load time replaces it. The native result
+contains measurementId, deviceId, bootId, source, ppm and measuredAtMs (decimal
+calendar milliseconds). No sensor uint64 is converted into a JavaScript number.
+
+`AndroidLiveSampleHistory` opens the existing database with OPEN_READONLY on its
+own serial worker, separate from both main/GATT and the write queue. An absent
+database returns an empty page without creating it. Existing unreadable or
+incompatible databases reject the bridge call; the UI shows the storage error.
+No schema version, rows or writer behavior is changed.
+
+SQLite applies the whole `[from, to)` filter and ORDER BY before LIMIT. Time sort
+uses `(measured_at, rowid)`; ppm sort uses `(ppm, measured_at, rowid)`, with every
+key in the selected direction. The unique rowid breaks ties without OFFSET.
+The first page captures MAX(rowid); subsequent pages exclude later inserts and
+use a keyset cursor bound to period, optional device filter, sort and page size.
+Reloading/filtering/sorting starts a new snapshot and clears the old cursor.
+Only the requested page plus one look-ahead row is returned by the SQL query.
+
+`AndroidLiveSampleHistoryTest` exercises real SQLite in the isolated target:
+missing/empty and populated history, exact receipt boundaries, four sorts over
+multiple pages with ties, concurrent inserts between pages, cursor validation,
+read errors and unchanged database bytes. UI tests cover the Android bridge,
+stale replies, local errors, common controls and the unchanged browser HTTP path.
+
+History verification on POCO 2412DPC0AG (2026-11-11): all six new
+`AndroidLiveSampleHistoryTest` cases passed on real SQLite (**0.273 s**), and
+18 targeted Angular UI/data-access tests passed. The updated main debug app was
+then checked with the existing 120 sensor receipts, no BLE service and no adb
+reverse mapping. No backend was started. In each of the four UI sort directions,
+**Weitere laden** returned pages **50 + 50 + 20**; all IDs in the displayed order
+matched a read-only SQLite snapshot. Header arrows/aria-sort changed correctly,
+the empty future period showed no rows, and a fresh WebView reload still loaded
+the history after disconnect. Observed history HTTP calls: **0**. The main
+database's SHA-256 was identical before and after these checks. Temporary WebView
+inspection hooks/forwarding were removed; no test rows were added to the main DB.
 
 Targeted tests: `LiveSampleAdmissionTest` and `LiveSampleWriterTest` cover session
 fencing, captured identity/calendar time, exact uint64, serial writes, graceful

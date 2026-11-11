@@ -9,6 +9,8 @@ import {
   CapacitorHttp
 } from '@capacitor/core';
 import { MEASUREMENT_API_CONFIG } from './measurement-api.config';
+import { ANDROID_BLE } from './ble-platform';
+import { NATIVE_HISTORY_BRIDGE, nativeHistoryPage } from './native-history-bridge';
 
 export interface ServerMeasurement {
   measurementId: string; deviceId: string; source: string; measuredAt: string;
@@ -19,10 +21,12 @@ export interface ServerHistoryFilters { from: string; to: string; deviceId: stri
 interface Page { items: ServerMeasurement[]; nextCursor: string | null; }
 class HistoryError extends Error { }
 
-/** Volatile server view. No storage, local history or BLE dependency. */
+/** Shared paged view: Android native receipt history, browser server history. */
 @Injectable()
 export class ServerHistory {
   private readonly config = inject(MEASUREMENT_API_CONFIG);
+  private readonly android = inject(ANDROID_BLE);
+  private readonly nativeHistory = this.android ? inject(NATIVE_HISTORY_BRIDGE) : null;
   readonly rows = signal<ServerMeasurement[]>([]);
   readonly nextCursor = signal<string | null>(null);
   readonly loading = signal(false);
@@ -68,14 +72,26 @@ export class ServerHistory {
       if (f.sort) params.set('sort', f.sort);
       if (deviceId) params.set('deviceId', deviceId);
       if (more) params.set('cursor', this.nextCursor()!);
-      const url = this.endpoint() + '?' + params;
-      const response = Capacitor.getPlatform() === 'android'
-        ? await this.getNative({ url, responseType: 'json', connectTimeout: 15000, readTimeout: 15000 })
-        : await fetch(url, { signal: abort.signal });
-      if (!current()) return;
-      if (abort.signal.aborted) throw new HistoryError('Die Anfrage hat zu lange gedauert. Bitte erneut versuchen.');
-      if (response.status !== 200) throw new HistoryError(response.status === 400 ? 'Der Server hat Zeitraum, Geräte-ID oder Cursor abgelehnt. Bitte neu laden.' : 'Der Serververlauf konnte nicht geladen werden. Bitte erneut versuchen.');
-      const page: Page = 'data' in response ? response.data : await response.json();
+      let page: Page;
+      if (this.nativeHistory) {
+        page = nativeHistoryPage(await this.nativeHistory.getLiveHistory({
+          fromMs: from.getTime().toString(),
+          toMs: to.getTime().toString(),
+          sort: f.sort ?? 'time-desc',
+          pageSize: 50,
+          ...(deviceId ? { deviceId } : {}),
+          ...(more ? { cursor: this.nextCursor()! } : {}),
+        }));
+      } else {
+        const url = this.endpoint() + '?' + params;
+        const response = Capacitor.getPlatform() === 'android'
+          ? await this.getNative({ url, responseType: 'json', connectTimeout: 15000, readTimeout: 15000 })
+          : await fetch(url, { signal: abort.signal });
+        if (!current()) return;
+        if (abort.signal.aborted) throw new HistoryError('Die Anfrage hat zu lange gedauert. Bitte erneut versuchen.');
+        if (response.status !== 200) throw new HistoryError(response.status === 400 ? 'Der Server hat Zeitraum, Geräte-ID oder Cursor abgelehnt. Bitte neu laden.' : 'Der Serververlauf konnte nicht geladen werden. Bitte erneut versuchen.');
+        page = 'data' in response ? response.data : await response.json();
+      }
       if (!current()) return;
       if (abort.signal.aborted) throw new HistoryError('Die Anfrage hat zu lange gedauert. Bitte erneut versuchen.');
       if (!page || !Array.isArray(page.items) || page.items.length > 50 ||
@@ -90,7 +106,9 @@ export class ServerHistory {
       this.nextCursor.set(page.nextCursor); this.loaded.set(true);
     } catch (error) {
       if (current()) this.error.set(error instanceof HistoryError
-        ? error.message : 'Der Server ist nicht erreichbar oder die Anfrage wurde unterbrochen. Bitte erneut versuchen.');
+        ? error.message : this.android
+          ? 'Der lokale Verlauf konnte nicht geladen werden: ' + (error instanceof Error ? error.message : String(error))
+          : 'Der Server ist nicht erreichbar oder die Anfrage wurde unterbrochen. Bitte erneut versuchen.');
     } finally { clearTimeout(timeout); if (current()) this.loading.set(false); }
   }
   getNative(options: Parameters<typeof CapacitorHttp.get>[0]) { return CapacitorHttp.get(options); }

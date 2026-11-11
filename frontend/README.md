@@ -23,9 +23,10 @@ threshold footer. Existing local storage, journal and HTTP synchronization
 implementations remain available internally and are not rewritten by this UI change.
 
 Browser LIVE_SAMPLE records are saved in IndexedDB and automatically uploaded;
-MeasuredAt is browser reception time. Android continues to use its existing
-native storage/journal paths; sharing the UI does not add browser persistence
-to NativeBleSession. Only server history is shown in the shared UI.
+MeasuredAt is browser reception time. Android stores received LIVE_SAMPLE in
+native SQLite independently of the WebView; its timestamp is phone reception
+time. The single shared history view reads Android SQLite locally and PostgreSQL
+through the API in browsers. No Android HTTP upload is added.
 
 The page and DeviceDiscovery share the same route-scoped BLE
 session. On Android the native service keeps this connection when the device selector is
@@ -37,7 +38,7 @@ still end the connection; a foreground service is not an unlimited-execution gua
 
 ## Shared BLE session contract
 
-**Serververlauf** is a separate, manually loaded PostgreSQL view through
+The browser history is a manually loaded PostgreSQL view through
 GET /api/measurements using the existing API address configuration. Local datetime
 inputs are sent as UTC; the table displays local time. The period is [from, to),
 and **Weitere laden** uses nextCursor (50 rows per page). The UI filters only by
@@ -49,7 +50,12 @@ and Segment are not displayed; the API DTO and optional device filter remain unc
 Changing filters clears all pages and invalidates pending replies. Server rows
 exist only in memory: no IndexedDB import, local-history merge or backend write.
 Loading, empty results and errors are shown in German. Android uses the same
-configured native HTTP/USB route as synchronization; no server means an explicit error.
+controls with `BleService.getLiveHistory`: read-only native SQLite queries on a
+separate worker, without HTTP, a backend, BLE connection or a running BLE service.
+The half-open period filters saved phone receipt times. Native sorting/pagination
+uses stable keysets over the whole period; an open cursor excludes later inserts
+until the user reloads. Storage errors are displayed, not replaced by empty data.
+See [native history details](android/BLE_SERVICE.md#reading-history-without-a-ble-service).
 
 In Chrome on Windows, **Sensor auswählen** opens the browser device chooser with
 the Lüftlotse service UUID filter. Use HTTPS or localhost with Web Bluetooth

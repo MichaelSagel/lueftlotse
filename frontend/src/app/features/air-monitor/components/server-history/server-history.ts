@@ -9,13 +9,13 @@ function localInput(time: number): string {
 @Component({
   selector: 'app-server-history', imports: [DatePipe], providers: [ServerHistory],
   template: `
-    <section id="server-history" aria-label="Serververlauf">
+    <section id="server-history" aria-label="Messverlauf">
       <div class="period-filter">
       <label>Von <input type="datetime-local" [value]="from()" (input)="from.set($any($event.target).value); changed()"></label>
       <label>Bis <input type="datetime-local" [value]="to()" (input)="to.set($any($event.target).value); changed()"></label>
       </div>
       <button type="button" (click)="history.load()" [disabled]="history.loading()">Verlauf anzeigen</button>
-      @if (history.loading()) { <p role="status">Serververlauf wird geladen …</p> }
+      @if (history.loading()) { <p role="status">Verlauf wird geladen …</p> }
       @if (history.error(); as error) { <p role="alert">{{ error }}</p> }
       @if (history.loaded() && !history.rows().length && !history.loading()) { <p role="status">Keine Messungen für diesen Zeitraum gefunden.</p> }
       @if (history.rows().length) {

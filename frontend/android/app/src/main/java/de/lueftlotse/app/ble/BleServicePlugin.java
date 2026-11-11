@@ -45,6 +45,37 @@ public final class BleServicePlugin extends Plugin {
         });
     }
     @PluginMethod public void getState(PluginCall call) { BleServiceRuntime.MAIN.post(() -> resolveState(call)); }
+    /** Local history is available without a BLE run, permission request or binding migration. */
+    @PluginMethod public void getLiveHistory(PluginCall call) {
+        try {
+            Object rawSize = call.getData().opt("pageSize");
+            if (!(rawSize instanceof Integer)) {
+                throw new IllegalArgumentException("Expected integer history pageSize");
+            }
+            NativeHistoryQuery query = new NativeHistoryQuery(
+                call.getString("fromMs"),
+                call.getString("toMs"),
+                call.getString("deviceId"),
+                call.getString("sort"),
+                (Integer) rawSize,
+                call.getString("cursor")
+            );
+            AndroidLiveSampleHistory.load(getContext(), query).whenComplete((page, error) -> {
+                if (error != null) {
+                    Throwable cause = error.getCause() == null ? error : error.getCause();
+                    call.reject("Lokaler Verlauf: " + cause);
+                    return;
+                }
+                try {
+                    call.resolve(JSObject.fromJSONObject(new JSONObject(page)));
+                } catch (Exception failure) {
+                    call.reject("Invalid native history result", failure);
+                }
+            });
+        } catch (Exception error) {
+            call.reject("Lokaler Verlauf: " + error.getMessage(), error);
+        }
+    }
     /** Cancels transport work without changing the durable user connection intention. */
     @PluginMethod public void closeSession(PluginCall call) {
         BleServiceRuntime.MAIN.post(() -> {
