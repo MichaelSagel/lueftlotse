@@ -4,18 +4,19 @@
 is started, unbound, non-exported and uses `connectedDevice`; it holds no Activity
 or WebView reference. Activity recreation or dismissal does not close its session.
 It uses `START_NOT_STICKY`, no boot receiver and no automatic connection/reconnect.
-A null restart intent does not open GATT. Process death loses state and the sample.
+A null restart intent does not open GATT. Process death loses connection state and
+the preview cache, but committed native measurements remain on disk.
 
 On Android the route selects `NativeBleSession` as the only `BLE_SESSION` for the
 page, discovery and manual journal download. Attaching the first UI reader runs
 the idempotent [binding migration](BLE_BINDING.md), including a confirmed empty
 binding. Migration/read/deletion errors block connection with a German message;
-there is no fallback transport. Migration never starts GATT. **Verbinden** is the
-only connection trigger. Browser routes select `BrowserBleSession`: history
+there is no fallback transport. Migration never starts GATT. **Sensor auswählen**
+followed by device selection explicitly starts the connection. Browser routes select `BrowserBleSession`: history
 remains accessible, but native calls and migration are forbidden.
 
-The service receives LIVE_SAMPLE independently of the WebView, without storing
-it. [Manual download](BLE_JOURNAL_BRIDGE.md) uses the same transport and retains
+The service receives and stores LIVE_SAMPLE independently of the WebView.
+[Manual download](BLE_JOURNAL_BRIDGE.md) uses the same transport and retains
 the TypeScript atomic IndexedDB commit → ACK → matching ACK_ACCEPTED contract.
 
 ## Ownership, ordering and cleanup
@@ -116,7 +117,7 @@ the service connection; collapsing discovery never disconnects it.
 
 Snapshot fields: `state` (`stopped`, `starting`, `connecting`, `ready`, `stopping`,
 `error`), `owner` (`none`, `legacy`, `service`), `runId`, `bleAddress`, `deviceId`
-(only after STATUS handshake), `reason`, `bindingError`, `permissionsGranted`, `lastSample`,
+(only after STATUS handshake), `reason`, `bindingError`, `liveStorageError`, `permissionsGranted`, `lastSample`,
 `sampleAvailable`, `nowElapsedMs`, negotiated `info`, and correlated `status`.
 No numeric uint64 crosses the bridge.
 
@@ -148,8 +149,119 @@ sample remains unavailable; no new sample timestamp is invented.
 The sample is available only while ready, before 15 seconds have elapsed, and
 until a SENSOR_ERROR notice. A new valid sample restores availability. Disconnect
 retains the last sample/time for inspection but marks it unavailable; a new run
-clears it. The bounded cache holds only one immutable sample in RAM, with no
-IndexedDB, file, history or backend write.
+clears it. The bounded preview cache holds only one immutable sample in RAM;
+native persistence below is separate from UI availability and never uses IndexedDB.
+
+## Autonomous native LIVE_SAMPLE storage
+
+After protocol validation, `SensorBleService` captures `System.currentTimeMillis()`
+at its native LIVE_SAMPLE callback, before dispatching to main. Main admits only
+the current connection/run in READY with matching handshake bootId and captures
+that session's Info deviceId into an immutable `NativeLiveSample`. Its `measured_at`
+is the phone's calendar receipt time, not the sensor's acquisition time and not
+derived from elapsedRealtime. Transport/dispatch latency and phone clock changes
+can affect this receipt time; uptime remains a separate exact field.
+
+`BleServiceRuntime` owns one process-wide `LiveSampleWriter`. All helper creation,
+database opening, queries and transactions run on its single disk thread, outside
+the BLE loop and main looper. `AndroidLiveSampleStore` uses the platform
+SQLiteOpenHelper without an additional dependency. Its database is
+`noBackupFilesDir/live-samples-v1.db`, separate from bindings and WebView data;
+it survives app restarts/updates but is excluded from backup and lost on uninstall
+or app data clearing.
+
+The `live_samples` table stores a generated measurement UUID, deviceId, bootId,
+sampleCounter, uptimeMs, ppm, measured_at and source=`sensor`. Both uint64 fields
+are canonical decimal TEXT, never signed SQLite integers or JSON numbers.
+One transaction checks and inserts the unique `(device_id, boot_id, sample_counter)`
+identity. A duplicate with matching ppm and uptimeMs preserves the original UUID
+and receipt time. A different ppm or uptimeMs is a conflict; failed opens/inserts
+and conflicts are not acknowledged as duplicates or silently overwritten.
+
+Accepted queue entries retain their captured device identity across disconnect
+and subsequent sessions. Normal disconnect keeps the foreground service until
+its queue barrier completes; it does not cancel accepted writes. Destroying the
+Activity/WebView does not own or shut down the queue. The last storage failure
+is logged and remains in `getState().liveStorageError` across subsequent reads,
+successful writes and new sessions within the process. Reading this field does
+not perform disk IO. There is no HTTP upload, history UI integration, reconnect,
+automatic retry of failed receipts, retention pruning or gap recovery in this path.
+
+Commit is the durability boundary: process death before commit can lose an
+accepted in-memory receipt, and LIVE_SAMPLE has no durable delivery ACK/replay.
+Screen-off operation still depends on Android keeping the existing foreground
+connection alive. The existing journal cancellation rules above remain unchanged.
+
+Targeted tests: `LiveSampleAdmissionTest` and `LiveSampleWriterTest` cover session
+fencing, captured identity/calendar time, exact uint64, serial writes, graceful
+queue drain and surfaced write/open failures. `AndroidLiveSampleStoreTest` in
+`app/src/androidTest` uses real SQLite in an isolated target-app noBackup subdirectory
+and covers reopen/reconnect duplicates, new boots/devices, uint64 TEXT, content
+conflicts and transaction rollback/retry. Run that class on a device/emulator;
+JVM tests alone do not execute Android SQLite. The class requires target package
+`de.lueftlotse.app.sqlitetest` before it creates any directory. Build that variant
+with a temporary Gradle init script setting debug applicationIdSuffix to
+`.sqlitetest` and the app buildDirectory to a temporary directory. Install only
+those isolated target/test APKs with `adb install -r`; the runner is
+`de.lueftlotse.app.sqlitetest.test/androidx.test.runner.AndroidJUnitRunner`.
+Do not run this class against the main package. Each test owns a fresh random
+child directory of the isolated target's noBackup directory, and cleanup does
+nothing if setup failed before creating that directory.
+
+Manual screen-off check (separate from automated tests): establish a connection
+from the visible app, background it so no UI reader polls, turn off the screen,
+wait for several samples, then inspect native row count/keys and receipt times.
+Record screen-off/keyguard times using the phone clock so samples before/after
+locking do not count as evidence. After **Trennen**, wait for SensorBleService to
+stop and drain accepted writes. Copy the database and any journal/WAL sidecars
+via `run-as` without modifying the phone files; query only the local copy with
+SQLite `mode=ro` and `PRAGMA query_only=ON`. An unrelated WebView service is not
+the BLE service. Do not infer a successful background check from compilation,
+mocks or total row growth alone.
+
+### Recorded POCO verification — 2026-11-11
+
+Device: POCO model **2412DPC0AG**. All six `AndroidLiveSampleStoreTest` tests passed
+on real Android SQLite: **OK (6 tests), 0.128 s**. These cover reopen/reconnect
+deduplication with the original UUID/time, independent boots/devices, maximum
+uint64 TEXT values, separate ppm/uptime conflicts, and failed-insert rollback
+followed by retry. The isolated target noBackup directory was empty after cleanup.
+The targeted JVM checks had also passed (37 scenarios across admission, writer,
+service state and binding actions); they were not rerun for the device experiment.
+
+The main debug APK was then installed as an update of `de.lueftlotse.app`, without
+uninstalling or clearing data. The installed APK hash matched the built APK.
+Initially `live-samples-v1.db` did not exist. The user connected the real sensor,
+backgrounded the Activity and locked the phone, then used notification **Trennen**
+after waking it. USB remained connected and the phone was powered. No backend
+or adb reverse was started/configured for this check; the native writer uses no
+HTTP upload. Forced idle and automatic reconnect were not used.
+
+MainActivity pause/stop events preceded the measured locked interval, so the UI
+reader was inactive. Read-only ADB observations of screen state, keyguard and
+foreground service state ran from the host. A conservative interior interval
+was selected from consecutive confirmed screen-OFF + keyguard observations;
+maximum observation spacing inside it was 1.264 s. All 49 service observations
+inside that interval showed foreground operation. Times below are **CET (UTC+01)**,
+using the phone's calendar clock; intervals include the start and exclude the end.
+
+| Receipt-time interval | Persisted rows |
+| --- | ---: |
+| 11:49:07.037–11:57:48.565 (521.528 s confirmed locked/screen-off interior) | 109 |
+| 11:49:07.037–11:52:07.037 (first three minutes inside that interval) | 38 |
+
+The final snapshot contained **120** rows: **6 before**, **109 inside**, and
+**5 after** the full interval. The first/last receipts inside it were
+11:49:07.210 / 11:57:47.479. Every row had source=`sensor`; there were no duplicate
+identity keys. After Trennen and BLE-service shutdown, the database plus journal
+were copied and inspected locally read-only: `PRAGMA quick_check` returned `ok`.
+No LIVE_SAMPLE storage errors appeared in the captured service log.
+Database copies, APKs and raw logs are local verification artifacts, not repository
+contents.
+
+This verifies one connected screen-off run with an inactive Activity reader;
+it does not establish survival of process death, destroyed WebView, force-stop,
+unplugged/battery operation, prolonged deep Doze or every OEM power policy.
 
 ## Verification and limits
 
@@ -168,9 +280,9 @@ Reflection tests pin the guard's API metadata to the installed BLE plugin.
 Core/shared-vector and fake-GATT tests remain part of the same command.
 
 The JVM lifecycle tests exercise the pure service state machine and ownership
-gate, not Android framework dispatch. On-device permission dialogs, actual
-notification actions, Activity recreation, screen lock/Doze and radio behavior
-still need testing when an APK is authorized. An FGS improves process priority;
+gate, not Android framework dispatch. Beyond the recorded POCO run above,
+permission edge cases, Activity recreation, deep Doze and radio-loss behavior
+still need device testing. An FGS improves process priority;
 it does not guarantee unlimited execution or survival of force-stop, process
 kill, OEM power management or radio loss. There is no wake lock or restart loop.
 

@@ -25,6 +25,7 @@ public final class BleServiceState {
     private boolean sampleValid;
     private String reason;
     private String bindingError;
+    private String liveStorageError;
     private long receivedAt;
     public BleServiceState(BleOwnership ownership) { this.ownership = ownership; }
     public synchronized Run reserve(boolean visible, boolean permitted, String address, String expected) {
@@ -45,6 +46,19 @@ public final class BleServiceState {
     public synchronized boolean canBecomeReady(String id) { return matches(id) && !run.stopping && phase == Phase.CONNECTING; }
     public synchronized boolean canStop(String id) { return matches(id) && !run.stopping; }
     public synchronized void bindingError(String error) { bindingError = error; }
+    public synchronized void liveStorageError(String error) {
+        liveStorageError = error;
+    }
+
+    /** Admission runs on main before enqueue; no worker may look up a later session. */
+    synchronized NativeLiveSample captureLive(String id, Codec.Message value, long arrival, long wallTime) {
+        if (!matches(id) || run.stopping || phase != Phase.READY || arrival < 0
+                || info == null || !info.supportsLiveSample() || value.type != 0x8a
+                || status == null || !status.text("bootId").equals(value.text("bootId"))) {
+            return null;
+        }
+        return new NativeLiveSample(info.deviceId, value, wallTime);
+    }
     /** Returns false for stale/duplicate starts; no second transport may be constructed. */
     public synchronized boolean open(String id, boolean permitted) {
         if (!matches(id) || run.opened || run.stopping) return false;
@@ -92,6 +106,7 @@ public final class BleServiceState {
         result.put("info", info == null ? null : ServiceJournal.map("major", info.major, "minor", info.minor, "deviceId", info.deviceId, "capabilities", info.capabilities));
         result.put("status", status == null ? null : status.toBridge());
         result.put("bindingError", bindingError);
+        result.put("liveStorageError", liveStorageError);
         result.put("lastSample", sample); result.put("nowElapsedMs", Long.toString(now));
         result.put("sampleAvailable", phase == Phase.READY && sampleValid && sample != null && now >= receivedAt && now - receivedAt < 15000);
         return Collections.unmodifiableMap(result);

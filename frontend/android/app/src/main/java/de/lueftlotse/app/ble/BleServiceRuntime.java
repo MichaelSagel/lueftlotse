@@ -16,6 +16,7 @@ public final class BleServiceRuntime {
     static final String CHANNEL = "sensor_connection_v1";
     static SensorBleService host;
     private static NativeBindingRepository bindings;
+    private static LiveSampleWriter liveSamples;
     private BleServiceRuntime() { }
 
     static void onMain() { if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Service command outside main queue"); }
@@ -43,6 +44,21 @@ public final class BleServiceRuntime {
                 grant(context, "android.permission.POST_NOTIFICATIONS"), notifications);
     }
     static Map<String, Object> snapshot() { onMain(); return STATE.snapshot(SystemClock.elapsedRealtime()); }
+    static synchronized LiveSampleWriter liveSamples(Context context) {
+        if (liveSamples == null) {
+            Context application = context.getApplicationContext();
+            liveSamples = new LiveSampleWriter(
+                () -> new AndroidLiveSampleStore(application),
+                (sample, error) -> {
+                    String message = "LIVE_SAMPLE storage [" + sample.deviceId + "/" + sample.bootId
+                        + "/" + sample.sampleCounter + "]: " + error;
+                    STATE.liveStorageError(message);
+                    android.util.Log.e("SensorBleService", message, error);
+                }
+            );
+        }
+        return liveSamples;
+    }
     static synchronized NativeBindingRepository bindings(Context context) {
         if (bindings == null) bindings = new NativeBindingRepository(new AndroidBindingStorage(context));
         return bindings;

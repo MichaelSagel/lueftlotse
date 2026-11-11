@@ -97,7 +97,19 @@ public final class SensorBleService extends Service {
                     }
                 }
                 public void live(GattTransport.Connection c, Codec.Message sample, long arrival) {
-                    BleServiceRuntime.MAIN.post(() -> { if (c == connection) BleServiceRuntime.STATE.live(token, sample, arrival); });
+                    // Capture the calendar receipt now, never derive UTC from elapsedRealtime.
+                    final long receivedAt = System.currentTimeMillis();
+                    BleServiceRuntime.MAIN.post(() -> {
+                        if (destroyed || c != connection) {
+                            return;
+                        }
+                        NativeLiveSample receipt = BleServiceRuntime.STATE.captureLive(token, sample, arrival, receivedAt);
+                        if (receipt == null) {
+                            return;
+                        }
+                        BleServiceRuntime.liveSamples(SensorBleService.this).submit(receipt);
+                        BleServiceRuntime.STATE.live(token, sample, arrival);
+                    });
                 }
                 public void closed(GattTransport.Connection c, String reason) {
                     c.closed().whenComplete((unused, error) -> BleServiceRuntime.MAIN.post(() -> closedRun(token, c, error == null, reason)));
@@ -130,7 +142,14 @@ public final class SensorBleService extends Service {
         BleServiceRuntime.STATE.closed(token, clean, reason);
         if (transport != null) transport.close();
         if (BleServiceRuntime.host == this) BleServiceRuntime.host = null;
-        if (!destroyed) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId); }
+        // Keep foreground lifetime until accepted disk work drains. A new run must not be stopped.
+        final int finishedStart = startId;
+        BleServiceRuntime.liveSamples(this).drain().thenRun(() -> BleServiceRuntime.MAIN.post(() -> {
+            if (!destroyed && c == connection && token.equals(runId) && !BleServiceRuntime.STATE.active()) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelfResult(finishedStart);
+            }
+        }));
     }
     private Notification notification(String text) {
         Intent disconnect = new Intent(this, SensorBleService.class).setAction(DISCONNECT).putExtra("runId", runId)
