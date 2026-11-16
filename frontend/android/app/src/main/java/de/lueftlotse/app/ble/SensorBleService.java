@@ -69,7 +69,7 @@ public final class SensorBleService extends Service {
         BleServiceState.Run run = BleServiceRuntime.STATE.current();
         try {
             BleServiceRuntime.createChannel(this);
-            if (!BleServiceRuntime.permitted(this)) throw new SecurityException("Bluetooth-/Benachrichtigungsberechtigung fehlt");
+            if (!BleServiceRuntime.permitted(this)) throw new SecurityException("Bluetooth-/Dienstberechtigung fehlt");
             BluetoothManager manager = getSystemService(BluetoothManager.class);
             BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
             if (adapter == null) throw new IllegalStateException("Bluetooth nicht verfügbar");
@@ -131,7 +131,9 @@ public final class SensorBleService extends Service {
                         reconnect.ready(new NativeBindingRepository.Binding(info.deviceId, address, true));
                         BleServiceRuntime.STATE.protocolStatus(token, event.message);
                         openJournal(token, event.generation, c);
-                        if (!destroyed && c.state() == GattTransport.State.READY) getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification("Sensor verbunden"));
+                        if (!destroyed && c.state() == GattTransport.State.READY) {
+                            updateServiceNotification("Sensor verbunden");
+                        }
                     }));
                     if (event.kind != ProtocolSession.Kind.READY) BleServiceRuntime.MAIN.post(() -> {
                         if (!currentConnection(token, c)) return;
@@ -139,7 +141,12 @@ public final class SensorBleService extends Service {
                         if (journal != null) journal.event(event);
                     });
                     if (event.kind == ProtocolSession.Kind.NOTICE && event.message != null && event.message.type == 0xff && event.message.number("code") == 7) {
-                        BleServiceRuntime.MAIN.post(() -> { if (currentConnection(token, c)) BleServiceRuntime.STATE.sensorError(token); });
+                        BleServiceRuntime.MAIN.post(() -> {
+                            if (currentConnection(token, c)) {
+                                BleServiceRuntime.STATE.sensorError(token);
+                                BleServiceRuntime.co2Alerts(SensorBleService.this).interrupted();
+                            }
+                        });
                     }
                 }
                 public void live(GattTransport.Connection c, Codec.Message sample, long arrival) {
@@ -155,6 +162,7 @@ public final class SensorBleService extends Service {
                         }
                         BleServiceRuntime.liveSamples(SensorBleService.this).submit(receipt);
                         BleServiceRuntime.STATE.live(token, sample, arrival);
+                        BleServiceRuntime.co2Alerts(SensorBleService.this).sample(receipt, arrival);
                     });
                 }
                 public void closed(GattTransport.Connection c, String reason) {
@@ -184,6 +192,7 @@ public final class SensorBleService extends Service {
         if (token == null || !token.equals(runId)) {
             return;
         }
+        BleServiceRuntime.co2Alerts(SensorBleService.this).interrupted();
         if (reconnect != null) {
             reconnect.cancel();
         }
@@ -218,13 +227,12 @@ public final class SensorBleService extends Service {
         afterClose(token, clean, c.identityRejected(), reason);
     }
     private void afterClose(String token, boolean clean, boolean identityRejected, String reason) {
+        BleServiceRuntime.co2Alerts(SensorBleService.this).interrupted();
         android.util.Log.i("SensorBleService", "BLE closed: " + reason);
         if (!destroyed && !BleServiceRuntime.STATE.stopping(token) && reconnect != null
                 && reconnect.unexpectedClose(clean, identityRejected)) {
             BleServiceRuntime.STATE.reconnecting(token, reason);
-            getSystemService(NotificationManager.class).notify(
-                NOTIFICATION_ID, notification("Verbindung unterbrochen. Wiederverbinden …")
-            );
+            updateServiceNotification("Verbindung unterbrochen. Wiederverbinden …");
             return;
         }
         if (reconnect != null) {
@@ -269,6 +277,13 @@ public final class SensorBleService extends Service {
                 .setContentIntent(content).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
                 .setCategory(Notification.CATEGORY_SERVICE).setPriority(Notification.PRIORITY_LOW)
                 .setSound(null).setVibrate(null).addAction(new Notification.Action.Builder(null, "Trennen", action).build()).build();
+    }
+    private void updateServiceNotification(String text) {
+        try {
+            getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification(text));
+        } catch (RuntimeException error) {
+            android.util.Log.e("SensorBleService", "Service notification could not be updated", error);
+        }
     }
     @Override public IBinder onBind(Intent intent) { return null; }
     @Override public void onDestroy() {

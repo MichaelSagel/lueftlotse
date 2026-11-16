@@ -186,7 +186,7 @@ export class NativeBleSession implements BleSession {
       this.phase.set('migrate'); const saved = await this.readBinding(); current();
       this.phase.set('permissions');
       const permissions = await this.bridge.requestPermissions(); current();
-      if (!permissions.permissionsGranted) throw new Error('BLE permissions: Bluetooth und Benachrichtigungen müssen erlaubt sein.');
+      if (!permissions.permissionsGranted) throw new Error('BLE permissions: Bluetooth muss erlaubt sein.');
       if (this.document.hidden) throw new Error('BLE permissions: Verbindung nur aus der sichtbaren App starten.');
       this.phase.set('connect');
       this.pendingStart = this.bridge.start({ bleAddress: address, expectedDeviceId: saved.binding?.deviceId });

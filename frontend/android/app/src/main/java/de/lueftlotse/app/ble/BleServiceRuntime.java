@@ -17,6 +17,7 @@ public final class BleServiceRuntime {
     static SensorBleService host;
     private static NativeBindingRepository bindings;
     private static LiveSampleWriter liveSamples;
+    private static Co2AlertMonitor co2Alerts;
     private BleServiceRuntime() { }
 
     static void onMain() { if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Service command outside main queue"); }
@@ -30,17 +31,20 @@ public final class BleServiceRuntime {
     }
     private static boolean grant(Context context, String permission) { return context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED; }
     public static boolean permitted(Context context) {
-        NotificationManager manager = context.getSystemService(NotificationManager.class);
-        boolean notifications = manager != null && manager.areNotificationsEnabled();
-        if (notifications && Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel channel = manager.getNotificationChannel(CHANNEL);
-            notifications = channel == null || channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
-        }
         return ServicePermissionPolicy.canConnect(Build.VERSION.SDK_INT,
                 grant(context, Manifest.permission.BLUETOOTH) && grant(context, Manifest.permission.BLUETOOTH_ADMIN),
                 grant(context, "android.permission.BLUETOOTH_CONNECT"),
                 grant(context, "android.permission.FOREGROUND_SERVICE"),
-                grant(context, "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"),
+                grant(context, "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"));
+    }
+    static boolean notificationsPermitted(Context context, String channelId) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        boolean notifications = manager != null && manager.areNotificationsEnabled();
+        if (notifications && Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = manager.getNotificationChannel(channelId);
+            notifications = channel == null || channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+        }
+        return ServicePermissionPolicy.canNotify(Build.VERSION.SDK_INT,
                 grant(context, "android.permission.POST_NOTIFICATIONS"), notifications);
     }
     static Map<String, Object> snapshot() { onMain(); return STATE.snapshot(SystemClock.elapsedRealtime()); }
@@ -58,6 +62,20 @@ public final class BleServiceRuntime {
             );
         }
         return liveSamples;
+    }
+    static synchronized Co2AlertMonitor co2Alerts(Context context) {
+        if (co2Alerts == null) {
+            Context application = context.getApplicationContext();
+            AndroidCo2Notifications notifications = new AndroidCo2Notifications(application);
+            co2Alerts = new Co2AlertMonitor(
+                () -> new Co2AlertPolicy(new AndroidCo2AlertStore(application)),
+                SystemClock::elapsedRealtime,
+                notifications::allowed,
+                notifications,
+                error -> android.util.Log.e("SensorBleService", "CO2 alert processing failed", error)
+            );
+        }
+        return co2Alerts;
     }
     static synchronized NativeBindingRepository bindings(Context context) {
         if (bindings == null) bindings = new NativeBindingRepository(new AndroidBindingStorage(context));

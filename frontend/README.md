@@ -13,7 +13,10 @@ automatic fallback. Reconnect requires another handshake and a new sample.
 
 The German labels are **CO₂-Wert akzeptabel** below 1000 ppm, **Bitte lüften**
 at 1000–1999 ppm, and **Hoher CO₂-Wert** with **Bitte lüften** from 2000 ppm.
-These display thresholds do not create Android notifications.
+Android additionally warns after fresh native LIVE_SAMPLE values stay at or above
+2000 ppm for 30 seconds. A fresh value below 1800 ppm rearms the warning;
+reconnection alone does not. This uses a separate notification channel without
+WebView/backend involvement; denied notifications do not block BLE/SQLite.
 
 Browser and Android now share the simplified single-column UI at every screen
 width (maximum 440 CSS pixels, centered). The only permanent connection action
@@ -125,7 +128,8 @@ German service notification has **Trennen**. A native ownership guard rejects a
 second connection. The installed BLE plugin only scans; its GATT and bonding calls
 are rejected even before migration. The UI requests Bluetooth/notification permissions
 from a visible Activity, then explicitly starts the service. Missing grants prevent
-GATT. Process/boot auto-start and CO₂ alerts are not implemented. Native LIVE_SAMPLE
+GATT only when required Bluetooth/service grants are missing; notifications are
+optional. Process/boot auto-start is not implemented. Native LIVE_SAMPLE
 is stored in SQLite; unexpected drops after handshake use the live service's
 bounded-delay retry policy, independently of WebView lifetime.
 

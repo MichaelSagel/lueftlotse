@@ -75,7 +75,7 @@ wake alarm or a wall-clock reconnection deadline. There is still no wake lock.
 
 At timer delivery the service re-reads the durable binding: connectionEnabled
 must be true, and deviceId/address must match this run's confirmed target.
-Permissions/notification availability are rechecked. Only one timer/attempt is
+Bluetooth/service permissions are rechecked. Only one timer/attempt is
 allowed. Every retry creates a new transport and repeats Info identity validation,
 notification subscription and the correlated handshake. A typed
 `Connection.identityRejected()` flag makes an Info UUID mismatch terminal;
@@ -131,12 +131,12 @@ the app references the existing `ble-gatt-transport` Gradle project.
 | API 24–30 | Manifest BLUETOOTH / BLUETOOTH_ADMIN (maxSdk 30); no service scan/location request |
 | API 28+ | Manifest FOREGROUND_SERVICE |
 | API 31+ | Granted runtime BLUETOOTH_CONNECT |
-| API 33+ | Granted runtime POST_NOTIFICATIONS under this app's visible-notification policy |
+| API 33+ | POST_NOTIFICATIONS is optional for BLE/storage; required only for visible CO2 alerts |
 | API 34+ | Manifest FOREGROUND_SERVICE_CONNECTED_DEVICE plus BLUETOOTH_CONNECT prerequisite |
 
 The existing UI's scan/location permissions are preserved. The service connects
-to an explicit address and does not scan or pair. Grants and notification/channel
-availability are checked before reserving a run and again inside the service,
+to an explicit address and does not scan or pair. Bluetooth/foreground-service
+grants are checked before reserving a run and again inside the service,
 before creating the transport. Missing permission means no GATT is opened.
 
 The UI calls `requestPermissions` from the visible Activity before `start`.
@@ -144,9 +144,11 @@ The UI calls `requestPermissions` from the visible Activity before `start`.
 The service promptly calls `startForeground` before connecting. These choices
 follow Android's [foreground service launch rules](https://developer.android.com/develop/background-work/services/fgs/launch)
 and [connectedDevice prerequisites](https://developer.android.com/develop/background-work/services/fgs/service-types#connected-device).
-Android does not itself require POST_NOTIFICATIONS to start an FGS; this app
-requires it and enabled notifications so the user can see **Trennen** in the
-drawer. See the [notification permission behavior](https://developer.android.com/develop/ui/views/notifications/notification-permission).
+POST_NOTIFICATIONS and enabled notification channels no longer gate BLE,
+reconnection or SQLite recording. The mandatory foreground notification is still
+provided with **Trennen**; Android may hide it from the drawer when permission
+is denied. Only the separate CO2 alert requires visible-notification permission.
+See the [notification permission behavior](https://developer.android.com/develop/ui/views/notifications/notification-permission).
 
 The low-importance channel **Sensor-Verbindung** has no sound, vibration or badge.
 The ongoing notification is **Lüftlotse Sensor**, initially **Verbindung wird
@@ -157,7 +159,7 @@ schedules reconnect. A storage failure still closes the connection, leaves an
 explicit `bindingError` in state and shows a German error toast for notification
 actions. Bridge actions reject their promise instead of reporting success.
 This notification reports
-the connection; no CO₂-threshold notification exists yet.
+the connection; CO₂ alerts use the independent channel described below.
 
 ## Local Capacitor bridge
 
@@ -456,3 +458,177 @@ read locally in read-only mode and passed quick_check; raw artifacts remain
 outside the repository. Missing-grant and forgotten-binding startup guards were
 covered by targeted tests, without revoking real phone grants or deleting its
 real binding. No backend or adb reverse was used for these checks.
+
+## Native CO2 episode warning
+
+Only validated LIVE_SAMPLE receipts of the current READY session feed the native
+alert queue, after submission to the unchanged SQLite writer. The independent
+serial queue uses application context and elapsedRealtime; neither WebView,
+calendar time, HTTP nor PostgreSQL participates. It never injects measurements.
+
+A warning requires consecutive fresh receipts at **2000 ppm or above for at
+least 30000 ms**. The receipt at/after the boundary must confirm it; no timer
+alone can fire an alert. A gap of **15000 ms or more**, stale queued delivery,
+sensor measurement error, disconnect or fresh value below 2000 resets the
+unfinished countdown. Freshness is checked against processing time as well as
+receipt-to-receipt gaps, so sleeping/delayed handlers cannot bridge stale data.
+An epoch invalidates queued receipts on interruption. Duplicate counters in the
+same boot do not refresh the countdown. A new boot resets an unfinished countdown.
+
+One warning is allowed per device episode. Only a fresh value **below 1800 ppm**
+rearms it; 1800 itself and values in 1800-1999 do not. Disconnect, reconnect and
+ESP32 boot changes do not rearm. The warned latch is atomically stored separately
+per deviceId in no_backup/co2-alerts-v1/<uuid>.state, before notification delivery,
+and survives Trennen and process recreation. The monotonic countdown itself is
+not persisted. All latch IO runs on the alert queue, not BLE/main or SQLite queues.
+Unreadable latch state fails closed and is logged, without changing measurements.
+
+The separate high-importance channel is **co2_high_v1** (CO2 warnings), notification
+ID **4102**; the ongoing Sensor connection notification remains ID **4101** with
+Trennen. App permission and the alert channel setting are checked independently.
+If permission is denied, no notification is attempted and no warned latch is
+consumed; a later permitted fresh high receipt may confirm the existing duration.
+A permission race or notification exception after the latch commit is logged and
+conservatively consumes the episode, avoiding repeated attempts; delivery is not
+guaranteed by the OS. Notification errors never cancel BLE or SQLite recording.
+
+Automated verification uses synthetic JVM receipts: 30-second boundary, short spike,
+15-second freshness boundary, delayed delivery, disconnect, duplicate counters,
+new boot, no repeats, fresh <1800 rearming, recreation of persisted latch state,
+denied notification permission and isolated notification/storage errors. These
+fixtures are not real sensor measurements and are not written to the phone DB.
+The targeted run passed 33 app JVM tests (10 episode policy, 3 alert queue,
+5 permissions, 11 reconnect and 4 live-writer cases), plus 33 Android-facade
+UI tests. Debug Java compilation and git diff --check passed; no full suite,
+production web build or APK packaging was required for this change.
+
+### POCO notification delivery with synthetic samples (2026-11-16)
+
+This experiment tests Android notification delivery on a real POCO with
+**synthetic 2200 ppm values**, not real SCD41 measurements or sensor accuracy.
+Only the separate package `de.lueftlotse.app.co2test` was installed. A temporary
+Gradle init script changed its application ID/build directory and compiled a
+temporary Java copy with test-only arming/generation controls. The repository's
+release sources contain no synthetic entry point. The temporary init script
+rejects release tasks; APKs, copied sources, logs and snapshots stay outside Git.
+
+The five production alert-handler/runtime files were verified byte-identical
+before building. The isolated copy of SensorBleService uses its original
+foreground-notification builder (ID 4101, Trennen); its test-only branch feeds
+`BleServiceRuntime.co2Alerts(...).sample(...)`, the same handler as real receipts.
+It bypasses GATT and the SQLite writer entirely. The probe Activity is native,
+without a WebView; no backend or adb reverse is used. Normal service/GATT startup
+is not exercised by this injection harness.
+
+After the user locked the phone, a test-only receiver started 14 synthetic
+receipts at real elapsedRealtime intervals, spanning **65091 ms** with a maximum
+gap of **5010 ms**. The confirming seventh receipt arrived at **30039 ms**.
+There were zero alert records in 22 pre-threshold observations. The production
+sender logged exactly one post at **30061 ms**; Android held alert ID 4102 on
+`co2_high_v1`, alongside ID 4101 with its Trennen PendingIntent. There were no
+further posts through the remaining high samples and no alert-processing errors.
+
+All 50 observations during the series showed keyguard locked and Dozing.
+SCREEN_STATE_OFF was confirmed at delivery; ten observations elsewhere in the
+series showed brief SCREEN_STATE_ON while still locked/Dozing. Thus this is a
+locked-phone delivery test, not a claim of uninterrupted physical screen-off
+state throughout. NotificationManager records confirm OS delivery and retention
+of the Trennen action. The user subsequently reported that neither notification
+was visible on the lock screen. Therefore visual lock-screen presentation and
+user access to Trennen there have **not passed** verification; active OS records
+alone do not establish that the user can see or operate them.
+
+Read-only follow-up found POST_NOTIFICATIONS granted, alert importance HIGH,
+mHidden=false, mIntercept=false and no suppressed visual effects. Both general
+lock_screen_show_notifications and lock_screen_allow_private_notifications were
+1; channel lock-screen visibility inherited the system default. The exact cause
+of the missing UI presentation is not established. Per-app HyperOS lock-screen
+and Always-on-display settings remain possible factors, not a confirmed cause.
+No settings were changed. Visibility in the unlocked notification shade still
+requires a separate user check.
+
+The test package's no_backup contains only the separate episode-latch file;
+no history database was created. SHA-256 values of the main package's existing
+measurement DB and binding file were unchanged before/after; its APK update time
+also remained unchanged. Its app data and permissions were not modified. The
+previously successful automated tests were not rerun for this hardware experiment.
+
+A user-requested repeat used an updated isolated probe only: it first submitted
+a fresh synthetic 1700 ppm receipt through the same alert handler to rearm, then
+started another synthetic 2200 ppm series without deleting latch/history data.
+At 15:58:52.566 CET one alert post was logged, 30059 ms after the new series
+started. Android observations briefly contained both IDs 4101 and 4102, then
+only 4101 again about four seconds later. The phone was unlocked for this repeat;
+it does not establish lock-screen visibility. The user confirmed seeing and
+tapping the repeated alert; its subsequent disappearance is consistent with
+the sender's setAutoCancel(true). Visual presentation on the unlocked phone is
+therefore confirmed for synthetic values; lock-screen presentation remains
+unconfirmed after the earlier negative report. Main/release
+sources were unchanged; the repeat entry remains only in temporary test sources.
+
+A further locked-phone run used the **already installed** isolated APK, without
+rebuilding or rerunning automated tests. Its installed command combines a fresh
+synthetic 1700 ppm rearm receipt with immediate start of the high series; after
+this constraint was explained, the user confirmed the screen was locked and
+authorized starting that combined command. ADB confirmed SCREEN_STATE_OFF and
+keyguard before the command; no unlock or settings change was performed.
+
+The high series began at **17:07:00.168 CET**. Fourteen synthetic 2200 ppm receipts
+spanned 65091 ms. The confirming receipt arrived at 30050 ms and exactly one
+alert post was logged at **30083 ms** (17:07:30.251 CET). Twenty-two observations
+before 29 seconds contained only the service notification; no earlier alert post
+was logged. Both IDs were then present. All 50 observations during the series
+showed keyguard locked, with the service notification and its Trennen action
+retained; 27 showed SCREEN_STATE_OFF, the rest brief screen-on states while
+still locked. No alert-processing errors or repeated posts occurred. Actual
+lock-screen visibility was requested from the user separately and is not inferred
+from these OS notification records.
+
+The isolated no_backup contained its binding and episode-latch files, with no
+measurement database. The main app's binding checksum remained unchanged, but
+its measurement DB checksum changed during this run while its own BLE foreground
+service was active. Thus unchanged main DB bytes cannot be claimed for this run.
+Only read-only checks were made against that package; it was not started, stopped,
+updated or given synthetic data by the experiment. Synthetic receipts were sent
+only to the isolated package's alert handler, without its SQLite writer.
+
+### Dynamic notification text: 2000 / 2100 ppm probe
+
+Only the isolated debug APK was rebuilt/updated with the production sender's
+new body template, `CO₂ ist erhöht: {ppm} ppm`. The unchanged title remains
+`Lüftlotse: Bitte lüften`. Five production alert/runtime source files were checked
+byte-identical in the temporary build. Its test-only controls now separate RESET
+(one fresh synthetic 1700 ppm receipt) from a series with a selected 2000 or
+2100 ppm value. No release test entry, SQLite write or threshold change was added.
+
+The first start failed before any high receipts: a duplicate test ARM command
+recreated the probe after RESET, losing its in-memory readiness flag and causing
+`Rearm and valid ppm required`. The same installed test APK was restarted while
+keyguard remained locked, then RESET was repeated immediately before starting.
+This is a probe startup failure, not a failed 30-second threshold assertion.
+
+The completed **2000 ppm** series contained 14 synthetic receipts over 65096 ms.
+No alert was recorded before the threshold; exactly one post occurred at 30069 ms.
+Android's stored title was `Lüftlotse: Bitte lüften` and body was exactly
+`CO₂ ist erhöht: 2000 ppm`. Keyguard stayed locked in every observation and the
+test service notification retained Trennen. The user explicitly confirmed that
+both title and body were visible and correct on the locked phone, without
+tapping the notification. A separate 2100 ppm series was then started after
+another fresh synthetic 1700 ppm reset; its result is recorded separately.
+
+The separate **2100 ppm** series also contained 14 synthetic receipts, spanning
+65087 ms. There were no pre-threshold alerts; exactly one post occurred at
+30064 ms, with no repeats or alert-processing errors. Android's title remained
+`Lüftlotse: Bitte lüften`; its body was exactly `CO₂ ist erhöht: 2100 ppm`.
+This confirms that the compiled sender substitutes the triggering receipt's ppm
+rather than a fixed 2000. Keyguard remained locked in every observation and the
+service notification retained Trennen. The user explicitly confirmed that this
+second title/body were also visible and correct on the lock screen, without
+tapping the notification. Both 2000 and 2100 ppm text checks therefore have
+separate OS-record and user-visible confirmation.
+
+After both series the isolated package had binding/episode-latch files only,
+with no measurement SQLite database. The main package and phone settings were
+not modified. These are real-phone delivery checks with synthetic receipts,
+not real SCD41 measurements. No automated tests, commit or push were performed
+as part of this on-device text check.
