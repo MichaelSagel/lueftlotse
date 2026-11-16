@@ -18,12 +18,23 @@ final class ServiceBindingActions {
         BleServiceState.Run run = state.current();
         try {
             if (run.expectedDeviceId != null && !run.expectedDeviceId.equals(info.deviceId)) throw new IllegalStateException("BLE binding UUID mismatch");
-            repository.afterHandshake(run.bindingRevision, info.deviceId, run.address);
+            NativeBindingRepository.Snapshot saved = repository.afterHandshake(run.bindingRevision, info.deviceId, run.address);
+            state.confirmedBinding(runId, saved.revision);
             state.ready(runId, info); return true;
         } catch (IOException | RuntimeException error) {
             state.bindingError("Bindung nach STATUS nicht gespeichert: " + error.getMessage());
             close.accept(runId, "Bindung konnte nicht bestätigt werden"); return false;
         }
+    }
+    NativeBindingRepository.Binding automaticBinding(BigInteger revision, boolean visible, boolean permitted) throws IOException {
+        if (!visible || !permitted || state.active()) {
+            return null;
+        }
+        NativeBindingRepository.Snapshot saved = repository.requireMigrated();
+        if (!saved.revision.equals(revision) || saved.binding == null || !saved.binding.connectionEnabled) {
+            return null;
+        }
+        return saved.binding;
     }
     void disconnect(String runId, String reason) throws IOException {
         BleServiceState.Run run = state.current();

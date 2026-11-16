@@ -19,6 +19,7 @@ export class NativeBleSession implements BleSession {
   private readonly android = inject(ANDROID_BLE);
   private readonly document = inject(DOCUMENT);
   readonly state = signal<BleState>('idle');
+  readonly reconnecting = signal(false);
   readonly phase = signal<BlePhase>('idle');
   readonly info = signal<Info | null>(null);
   readonly status = signal<BleStatus | null>(null);
@@ -31,6 +32,7 @@ export class NativeBleSession implements BleSession {
   private readonly clients = new Set<AbortController>();
   private lease?: NativeJournalLease;
   private run?: string;
+  private connectionKey?: string;
   private connectionAbort = new AbortController();
   private polling?: ReturnType<typeof setInterval>;
   private reading = false;
@@ -48,10 +50,15 @@ export class NativeBleSession implements BleSession {
   private sampleUptime?: bigint;
   private sampleReceived?: bigint;
   private restoreSample = true;
+  private opening = false;
   private readonly visibility = () => {
     this.readerEpoch++; this.restoreSample = true;
     if (this.document.hidden) { this.lease?.revoke(); this.preview.next({ kind: 'unavailable' }); }
-    else { this.refreshPending = true; void this.refresh(); if (this.migrated) void this.readBinding().catch(() => {}); }
+    else {
+      this.refreshPending = true;
+      void this.refresh();
+      void this.connectOnOpen();
+    }
   };
   constructor() {
     this.document.addEventListener('visibilitychange', this.visibility);
@@ -69,7 +76,10 @@ export class NativeBleSession implements BleSession {
     const id = crypto.randomUUID();
     const owned = () => { client.signal.throwIfAborted(); if (this.destroyed) throw new Error('Native BLE adapter destroyed'); };
     if (!this.polling) {
-      this.readerEpoch++; this.restoreSample = true; void this.readBinding().catch(() => {}); void this.refresh();
+      this.readerEpoch++;
+      this.restoreSample = true;
+      void this.connectOnOpen();
+      void this.refresh();
       this.polling = setInterval(() => { void this.refresh(); }, 1000);
     }
     return {
@@ -109,6 +119,52 @@ export class NativeBleSession implements BleSession {
     }
     return this.migration;
   }
+  private async connectOnOpen(): Promise<void> {
+    if (this.opening || !this.android || this.document.hidden || this.destroyed || !this.clients.size) {
+      return;
+    }
+    this.opening = true;
+    const command = this.command;
+    const current = () => !this.destroyed && !this.document.hidden && this.clients.size > 0 && command === this.command;
+    let releaseScan: (() => void) | undefined;
+    let start: Promise<NativeServiceState> | undefined;
+    try {
+      const saved = await this.readBinding();
+      if (!current() || !saved.binding?.connectionEnabled || this.connecting) {
+        return;
+      }
+      const state = await this.bridge.getState();
+      if (!current()) {
+        return;
+      }
+      this.apply(state, performance.now());
+      if (!state.permissionsGranted || state.runId || state.reconnecting ||
+          (state.state !== 'stopped' && state.state !== 'error')) {
+        return;
+      }
+      releaseScan = await this.scanner.holdStopped();
+      if (!current() || this.connecting) {
+        return;
+      }
+      // Native command rechecks revision, enabled intent, grants and ownership atomically.
+      start = this.bridge.startSaved({ revision: saved.revision });
+      this.pendingStart = start;
+      const started = await start;
+      if (current()) {
+        this.apply(started, performance.now());
+      }
+    } catch (error) {
+      if (current()) {
+        this.error.set(String(error));
+      }
+    } finally {
+      if (this.pendingStart === start) {
+        this.pendingStart = undefined;
+      }
+      releaseScan?.();
+      this.opening = false;
+    }
+  }
   private async readBinding() {
     const read = ++this.bindingRead, epoch = this.readerEpoch;
     const current = () => !this.destroyed && read === this.bindingRead && epoch === this.readerEpoch;
@@ -120,7 +176,8 @@ export class NativeBleSession implements BleSession {
     finally { if (read === this.bindingRead) this.bindingLoading.set(false); }
   }
   private async connect(address: string, signal: AbortSignal): Promise<BleStatus> {
-    if (!this.android || this.document.hidden || this.connecting || this.state() === 'ready' || this.state() === 'closing') throw new Error('Native connection unavailable');
+    if (!this.android || this.document.hidden || this.connecting || this.pendingStart || this.reconnecting()
+        || this.state() === 'ready' || this.state() === 'closing') throw new Error('Native connection unavailable');
     this.connecting = true; const command = ++this.command; let releaseScan: (() => void) | undefined;
     const current = () => { signal.throwIfAborted(); if (command !== this.command || this.destroyed) throw new Error('Stale connect'); };
     this.state.set('connecting'); this.phase.set('scan-stop'); this.error.set(null);
@@ -192,10 +249,13 @@ export class NativeBleSession implements BleSession {
       value.state === 'stopping' ? 'closing' : value.state === 'error' ? 'error' : 'idle';
   }
   private apply(value: NativeServiceState, requested: number): void {
-    if ((value.runId ?? undefined) !== this.run) {
+    const connectionKey = value.connectionId ?? value.runId ?? undefined;
+    if ((value.runId ?? undefined) !== this.run || connectionKey !== this.connectionKey) {
       this.connectionAbort.abort(new BleSessionClosedError('Connection generation changed')); this.connectionAbort = new AbortController();
       this.run = value.runId ?? undefined; this.sampleCounter = undefined; this.sampleUptime = undefined; this.sampleReceived = undefined; this.restoreSample = true;
+      this.connectionKey = connectionKey;
     }
+    this.reconnecting.set(value.reconnecting === true);
     const state = this.uiState(value), wasReady = this.state() === 'ready';
     this.state.set(state); this.phase.set(state === 'connecting' ? 'status' : state);
     this.nativeBindingError = value.bindingError;

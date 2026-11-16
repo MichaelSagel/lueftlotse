@@ -48,6 +48,22 @@ describe.each([false,true])('shared connection UI, native scanner=%s', native =>
     button.click();await flush();fixture.detectChanges();expect(connection.disconnectByUser).toHaveBeenCalledOnce();expect(button.textContent?.trim()).toBe('Sensor auswählen');
     fixture.destroy();expect(connection.revoke).toHaveBeenCalledOnce();
   });
+  if (native) {
+    it('keeps Trennen enabled during native reconnect and cancels via the existing user action', async () => {
+      const reconnecting = signal(true);
+      Object.assign(connection, { reconnecting });
+      connection.state.set('connecting');
+      const { fixture, button } = render();
+      expect(button.textContent?.trim()).toBe('Trennen');
+      expect(button.disabled).toBe(false);
+      button.click();
+      await flush();
+      expect(connection.disconnectByUser).toHaveBeenCalledOnce();
+      expect(connection.connect).not.toHaveBeenCalled();
+      expect(scanner.start).not.toHaveBeenCalled();
+      fixture.destroy();
+    });
+  }
   it('blocks duplicate clicks while selecting, connecting and disconnecting',async()=>{
     let finish!:()=>void;
     connection.connect.mockImplementationOnce(async()=>{connection.state.set('connecting');await new Promise<void>(r=>finish=r);connection.state.set('ready');});

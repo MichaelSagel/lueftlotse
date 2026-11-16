@@ -32,9 +32,14 @@ The page and DeviceDiscovery share the same route-scoped BLE
 session. On Android the native service keeps this connection when the device selector is
 closed, the app is backgrounded or the screen is locked. Returning to the UI
 restores the last valid sample with its original age and remaining 15-second
-lifetime; stale data remains unavailable. Automatic connection/reconnect is not
-implemented. Process death, force-stop, radio loss and OEM power management can
-still end the connection; a foreground service is not an unlimited-execution guarantee.
+lifetime; stale data remains unavailable. Android retries an unexpected drop of
+a confirmed saved sensor within the live service, with delays capped at 30 seconds.
+Opening the visible Android app also connects to the saved sensor if connection
+intent is enabled, existing permissions are granted and no service run is active.
+No selection or permission dialog opens automatically. Trennen/forget disable
+this behavior as well as retries. Process death, force-stop and OEM power management
+can still end the service; no process/boot auto-start is added. Browser reconnection
+behavior is unchanged; a foreground service is not an unlimited-execution guarantee.
 
 ## Shared BLE session contract
 
@@ -120,7 +125,9 @@ German service notification has **Trennen**. A native ownership guard rejects a
 second connection. The installed BLE plugin only scans; its GATT and bonding calls
 are rejected even before migration. The UI requests Bluetooth/notification permissions
 from a visible Activity, then explicitly starts the service. Missing grants prevent
-GATT. Auto-start/reconnect and CO₂ alerts are not implemented. LIVE_SAMPLE is not persisted.
+GATT. Process/boot auto-start and CO₂ alerts are not implemented. Native LIVE_SAMPLE
+is stored in SQLite; unexpected drops after handshake use the live service's
+bounded-delay retry policy, independently of WebView lifetime.
 
 The [manual native journal bridge](android/BLE_JOURNAL_BRIDGE.md) provides one
 WebView lease, bounded BEGIN/ENTRY/END events and an explicit commit-token gate.
@@ -149,8 +156,9 @@ The migration document explains this storage limitation and the exact rules.
 After a successful STATUS handshake (including completion of its Control write),
 the app remembers one sensor: the UUID from Info, the BLE address supplied by the
 Android adapter, and `connectionEnabled: true`. This flag records connection intent
-for a future auto-connect feature; it does not currently initiate any connection.
-The saved sensor can be connected explicitly with **Verbinden**, without a scan.
+for retries within an already running service; it never starts a service after
+process death or phone boot. The saved sensor can be selected explicitly with
+**Sensor auswählen**.
 
 Every later connection must match the saved Info UUID. A mismatch closes the
 attempt without replacing the binding; choose **Gerät vergessen** before selecting
@@ -159,8 +167,9 @@ another successful handshake. **Trennen** persists disabled intent before closin
 the session, even when already disconnected or no run survived process restart.
 On persistence failure an existing session still closes and reports the error.
 Notification **Trennen** uses the same durable native action. Backgrounding and
-UI disposal revoke only journal clients. Radio loss or unsafe journal cancellation
-can close the transport without changing intent; no reconnect is scheduled.
+UI disposal revoke only journal clients. Radio loss without an explicit stop can
+retry the same saved sensor after confirmed cleanup; unsafe journal cancellation
+explicitly ends the run and does not retry.
 
 **Gerät vergessen** closes the session and removes the binding. It leaves history,
 journal cursors and pending backend synchronization intact. Forgetting and changing

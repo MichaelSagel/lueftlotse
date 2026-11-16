@@ -21,6 +21,7 @@ public final class SensorBleService extends Service {
     private int startId;
     private boolean destroyed;
     private ServiceJournal journal;
+    private ServiceReconnect reconnect;
     private final Runnable journalTick = new Runnable() {
         public void run() {
             if (destroyed || journal == null) return;
@@ -50,7 +51,7 @@ public final class SensorBleService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int id) {
         BleServiceRuntime.onMain();
         startId = id; // Includes notification actions and stale intents; stop the latest service start.
-        if (intent == null) { if (!BleServiceRuntime.STATE.active()) stopSelfResult(id); return START_NOT_STICKY; }
+        if (intent == null) { stopIfIdle(id); return START_NOT_STICKY; }
         String token = intent.getStringExtra("runId");
         if (DISCONNECT.equals(intent.getAction())) {
             try { BleServiceRuntime.bindingActions(this).disconnect(token, "Über Benachrichtigung getrennt"); }
@@ -58,13 +59,13 @@ public final class SensorBleService extends Service {
                 android.util.Log.e("SensorBleService", "Verbindungsabsicht nicht gespeichert; Verbindung geschlossen", error);
                 android.widget.Toast.makeText(this, "Verbindung getrennt. Verbindungsabsicht konnte nicht gespeichert werden.", android.widget.Toast.LENGTH_LONG).show();
             }
-            if (!BleServiceRuntime.STATE.active()) stopSelfResult(id);
+            stopIfIdle(id);
             return START_NOT_STICKY;
         }
         if (!START.equals(intent.getAction()) || !BleServiceRuntime.STATE.matches(token)) {
-            if (!BleServiceRuntime.STATE.active()) stopSelfResult(id); return START_NOT_STICKY;
+            stopIfIdle(id); return START_NOT_STICKY;
         }
-        if (token.equals(runId) && connection != null) return START_NOT_STICKY;
+        if (token.equals(runId)) return START_NOT_STICKY;
         BleServiceState.Run run = BleServiceRuntime.STATE.current();
         try {
             BleServiceRuntime.createChannel(this);
@@ -78,29 +79,74 @@ public final class SensorBleService extends Service {
             else startForeground(NOTIFICATION_ID, notification);
             if (!BleServiceRuntime.STATE.open(token, BleServiceRuntime.permitted(this))) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id); return START_NOT_STICKY; }
             BleServiceRuntime.host = this;
+            reconnect = new ServiceReconnect(new ServiceReconnect.Port() {
+                public ServiceReconnect.Timer schedule(Runnable action, long delayMs) {
+                    android.util.Log.i("SensorBleService", "Reconnect in " + delayMs + " ms");
+                    BleServiceRuntime.MAIN.postDelayed(action, delayMs);
+                    return () -> BleServiceRuntime.MAIN.removeCallbacks(action);
+                }
+                public NativeBindingRepository.Binding savedBinding() throws Exception {
+                    return BleServiceRuntime.bindings(SensorBleService.this).requireMigrated().binding;
+                }
+                public boolean permitted() {
+                    return !destroyed && BleServiceRuntime.STATE.matches(token)
+                        && !BleServiceRuntime.STATE.stopping(token) && BleServiceRuntime.permitted(SensorBleService.this);
+                }
+                public void connect(NativeBindingRepository.Binding saved) {
+                    connectAttempt(token, saved.bleAddress, saved.deviceId);
+                }
+                public void terminal(String reason) {
+                    BleServiceRuntime.disconnect(token, reason);
+                }
+            });
+            connectAttempt(token, run.address, run.expectedDeviceId);
+        } catch (RuntimeException error) {
+            if (connection != null && token.equals(runId)) { BleServiceRuntime.disconnect(token, error.toString()); }
+            else {
+                BleServiceRuntime.STATE.failBeforeOpen(token, error.toString());
+                // No connect handle was issued if factory/connect threw synchronously.
+                BleServiceRuntime.STATE.closed(token, true, error.toString());
+                if (transport != null) transport.close();
+                stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id);
+            }
+        }
+        return START_NOT_STICKY;
+    }
+    private void connectAttempt(String token, String address, String expectedDeviceId) {
+        BleServiceRuntime.onMain();
+        if (destroyed || !token.equals(runId) || BleServiceRuntime.STATE.stopping(token)) {
+            return;
+        }
+        try {
+            BluetoothManager manager = getSystemService(BluetoothManager.class);
+            BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+            if (adapter == null) {
+                throw new IllegalStateException("Bluetooth nicht verfügbar");
+            }
             transport = AndroidGattTransport.create(this, adapter, new GattTransport.Listener() {
                 public void event(GattTransport.Connection c, ProtocolSession.Event event) {
                     if (event.kind == ProtocolSession.Kind.READY) c.ready().thenAccept(info -> BleServiceRuntime.MAIN.post(() -> {
-                        if (c != connection || !BleServiceRuntime.STATE.matches(token)) return;
+                        if (!currentConnection(token, c)) return;
                         if (!BleServiceRuntime.bindingActions(SensorBleService.this).ready(token, info)) return;
+                        reconnect.ready(new NativeBindingRepository.Binding(info.deviceId, address, true));
                         BleServiceRuntime.STATE.protocolStatus(token, event.message);
                         openJournal(token, event.generation, c);
                         if (!destroyed && c.state() == GattTransport.State.READY) getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification("Sensor verbunden"));
                     }));
                     if (event.kind != ProtocolSession.Kind.READY) BleServiceRuntime.MAIN.post(() -> {
-                        if (c != connection || !BleServiceRuntime.STATE.matches(token)) return;
+                        if (!currentConnection(token, c)) return;
                         if (event.message != null && event.message.type == 0x80) BleServiceRuntime.STATE.protocolStatus(token, event.message);
                         if (journal != null) journal.event(event);
                     });
                     if (event.kind == ProtocolSession.Kind.NOTICE && event.message != null && event.message.type == 0xff && event.message.number("code") == 7) {
-                        BleServiceRuntime.MAIN.post(() -> { if (c == connection) BleServiceRuntime.STATE.sensorError(token); });
+                        BleServiceRuntime.MAIN.post(() -> { if (currentConnection(token, c)) BleServiceRuntime.STATE.sensorError(token); });
                     }
                 }
                 public void live(GattTransport.Connection c, Codec.Message sample, long arrival) {
                     // Capture the calendar receipt now, never derive UTC from elapsedRealtime.
                     final long receivedAt = System.currentTimeMillis();
                     BleServiceRuntime.MAIN.post(() -> {
-                        if (destroyed || c != connection) {
+                        if (destroyed || !currentConnection(token, c)) {
                             return;
                         }
                         NativeLiveSample receipt = BleServiceRuntime.STATE.captureLive(token, sample, arrival, receivedAt);
@@ -115,41 +161,103 @@ public final class SensorBleService extends Service {
                     c.closed().whenComplete((unused, error) -> BleServiceRuntime.MAIN.post(() -> closedRun(token, c, error == null, reason)));
                 }
             });
-            connection = transport.connect(run.address, run.expectedDeviceId);
+            connection = transport.connect(address, expectedDeviceId);
+            BleServiceRuntime.STATE.connectionStarted(token, connection.id);
+            android.util.Log.i("SensorBleService", "BLE attempt " + connection.id + " for " + expectedDeviceId);
         } catch (RuntimeException error) {
-            if (connection != null && token.equals(runId)) { BleServiceRuntime.disconnect(token, error.toString()); }
-            else {
-                BleServiceRuntime.STATE.failBeforeOpen(token, error.toString());
-                // No connect handle was issued if factory/connect threw synchronously.
-                BleServiceRuntime.STATE.closed(token, true, error.toString());
-                if (transport != null) transport.close();
-                stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id);
+            if (connection != null) {
+                BleServiceRuntime.disconnect(token, error.toString());
+            } else {
+                if (transport != null) {
+                    transport.close();
+                    transport = null;
+                }
+                afterClose(token, true, false, error.toString());
             }
         }
-        return START_NOT_STICKY;
     }
-    void disconnectRun(String token) {
-        BleServiceRuntime.onMain(); if (token == null || !token.equals(runId)) return;
-        if (journal != null) journal.closed("Connection closing");
+    private boolean currentConnection(String token, GattTransport.Connection candidate) {
+        return candidate == connection && BleServiceRuntime.STATE.matchesConnection(token, candidate.id);
+    }
+    void disconnectRun(String token, String reason) {
+        BleServiceRuntime.onMain();
+        if (token == null || !token.equals(runId)) {
+            return;
+        }
+        if (reconnect != null) {
+            reconnect.cancel();
+        }
+        if (journal != null) {
+            journal.closed("Connection closing");
+        }
         BleServiceRuntime.MAIN.removeCallbacks(journalTick);
-        if (connection != null) connection.cancel();
-        if (transport != null) transport.close();
+        if (connection != null) {
+            connection.cancel();
+            if (transport != null) {
+                transport.close();
+            }
+        } else {
+            BleServiceRuntime.STATE.closed(token, true, reason);
+            finishService(token);
+        }
     }
     private void closedRun(String token, GattTransport.Connection c, boolean clean, String reason) {
-        if (c != connection || !token.equals(runId)) return;
-        if (journal != null) journal.closed(reason);
+        if (c != connection || !token.equals(runId)) {
+            return;
+        }
+        if (journal != null) {
+            journal.closed(reason);
+            journal = null;
+        }
         BleServiceRuntime.MAIN.removeCallbacks(journalTick);
+        if (transport != null) {
+            transport.close();
+            transport = null;
+        }
+        connection = null;
+        afterClose(token, clean, c.identityRejected(), reason);
+    }
+    private void afterClose(String token, boolean clean, boolean identityRejected, String reason) {
+        android.util.Log.i("SensorBleService", "BLE closed: " + reason);
+        if (!destroyed && !BleServiceRuntime.STATE.stopping(token) && reconnect != null
+                && reconnect.unexpectedClose(clean, identityRejected)) {
+            BleServiceRuntime.STATE.reconnecting(token, reason);
+            getSystemService(NotificationManager.class).notify(
+                NOTIFICATION_ID, notification("Verbindung unterbrochen. Wiederverbinden …")
+            );
+            return;
+        }
+        if (reconnect != null) {
+            reconnect.cancel();
+        }
+        if (identityRejected) {
+            BleServiceRuntime.STATE.bindingError("Info UUID mismatch: " + reason);
+        }
         BleServiceRuntime.STATE.closed(token, clean, reason);
-        if (transport != null) transport.close();
-        if (BleServiceRuntime.host == this) BleServiceRuntime.host = null;
-        // Keep foreground lifetime until accepted disk work drains. A new run must not be stopped.
-        final int finishedStart = startId;
+        finishService(token);
+    }
+    private void finishService(String token) {
+        if (BleServiceRuntime.host == this) {
+            BleServiceRuntime.host = null;
+        }
+        // Keep foreground lifetime until accepted disk work drains; never stop a newer run.
         BleServiceRuntime.liveSamples(this).drain().thenRun(() -> BleServiceRuntime.MAIN.post(() -> {
-            if (!destroyed && c == connection && token.equals(runId) && !BleServiceRuntime.STATE.active()) {
+            BleServiceState.Run current = BleServiceRuntime.STATE.current();
+            if (!destroyed && token.equals(runId) && current != null && current.id.equals(token)) {
                 stopForeground(STOP_FOREGROUND_REMOVE);
-                stopSelfResult(finishedStart);
+                stopSelfResult(startId);
             }
         }));
+    }
+    private void stopIfIdle(int id) {
+        if (BleServiceRuntime.STATE.active()) {
+            return;
+        }
+        if (runId == null) {
+            stopSelfResult(id);
+        } else {
+            finishService(runId);
+        }
     }
     private Notification notification(String text) {
         Intent disconnect = new Intent(this, SensorBleService.class).setAction(DISCONNECT).putExtra("runId", runId)
@@ -165,7 +273,7 @@ public final class SensorBleService extends Service {
     @Override public IBinder onBind(Intent intent) { return null; }
     @Override public void onDestroy() {
         destroyed = true;
-        if (runId != null) { BleServiceRuntime.STATE.stop(runId, "Sensor-Dienst beendet"); disconnectRun(runId); }
+        if (runId != null) { BleServiceRuntime.STATE.stop(runId, "Sensor-Dienst beendet"); disconnectRun(runId, "Sensor-Dienst beendet"); }
         if (BleServiceRuntime.host == this) BleServiceRuntime.host = null;
         super.onDestroy();
     }

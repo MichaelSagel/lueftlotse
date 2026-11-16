@@ -5,7 +5,12 @@ On Android, `NativeBleSession` is the route's only `BLE_SESSION`. It invokes
 migration before every explicit connection. Constructors have no IO. Failure
 blocks connection and is reported in German; another explicit attempt can retry
 the idempotent operation. No fallback transport is used. Browser sessions cannot
-call the native bridge or migrate. Migration never starts the BLE service.
+call the native bridge or migrate. Migration itself never starts the BLE service. After it completes, opening the
+visible app may call `startSaved({revision})`: native code rechecks the current
+revision, enabled intent, grants and idle service ownership. Disabled/forgotten
+bindings never start automatically; no permission dialog is opened. Notification
+Trennen uses the same durable disabled intent. No boot/process-start receiver
+is added.
 
 ## One persistent owner
 
@@ -95,7 +100,9 @@ cleanup. IO failure still closes GATT in a finally block: the bridge rejects,
 `getState().bindingError` retains the error through cleanup, and the notification
 action shows a German error toast. An unsuccessful write is never reported as
 saved; on retry the repository re-reads disk rather than trusting a stale cache.
-No reconnection is scheduled.
+Trennen cancels any live-service retry timer/attempt, including when persistence
+fails. An unexpected drop with enabled intent can retry only inside the already
+running service; the saved flag does not start a service after process/phone restart.
 
 **Gerät vergessen** persists a null binding with migrationComplete still true,
 then closes/revokes the session, including a pending handshake. A storage failure

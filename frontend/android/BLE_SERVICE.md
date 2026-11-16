@@ -3,7 +3,8 @@
 `SensorBleService` owns one `GattTransport` / Java `ProtocolSession`. The service
 is started, unbound, non-exported and uses `connectedDevice`; it holds no Activity
 or WebView reference. Activity recreation or dismissal does not close its session.
-It uses `START_NOT_STICKY`, no boot receiver and no automatic connection/reconnect.
+It uses `START_NOT_STICKY`, no boot receiver and no process/boot service startup.
+An already confirmed connection may reconnect within the same live service run.
 A null restart intent does not open GATT. Process death loses connection state and
 the preview cache, but committed native measurements remain on disk.
 
@@ -11,7 +12,11 @@ On Android the route selects `NativeBleSession` as the only `BLE_SESSION` for th
 page, discovery and manual journal download. Attaching the first UI reader runs
 the idempotent [binding migration](BLE_BINDING.md), including a confirmed empty
 binding. Migration/read/deletion errors block connection with a German message;
-there is no fallback transport. Migration never starts GATT. **Sensor auswählen**
+there is no fallback transport. Migration itself never starts GATT. After migration,
+opening/returning to the visible Android app checks the saved connection intent
+and existing permissions. If enabled and idle, it connects to the saved sensor
+without selection or permission dialogs. Missing permissions leave manual selection
+available. An active, starting or retrying service is only reattached. **Sensor auswählen**
 followed by device selection explicitly starts the connection. Browser routes select `BrowserBleSession`: history
 remains accessible, but native calls and migration are forbidden.
 
@@ -48,10 +53,72 @@ serialized on Android's main looper. Only the transport's HandlerThread accesses
 GATT/the core. Each run has an opaque `runId`; callbacks also check the concrete
 connection identity. Duplicate starts do not open another transport, duplicate
 stops are harmless, and an old notification/callback cannot stop or mutate a new
-run. Ownership is released after confirmed native close; a failed close remains
-an explicit error with the lease retained. The service stops and removes its
-notification after cleanup. A pending start has a 10-second deadline, while
+run. Ownership stays reserved between retry attempts and is released after
+confirmed terminal close; a failed close remains an explicit error with the lease
+retained. The service stops and removes its notification after terminal cleanup
+and accepted writes drain. A pending start has a 10-second deadline, while
 transport connection/operation/core deadlines remain in force.
+
+## Reconnection inside a live service
+
+`ServiceReconnect` is created by an explicit service start and is armed only
+after that run completes the normal Info/CCCD/STATUS handshake and confirms the
+saved binding. A visible app opening may request `startSaved`; constructors,
+null restart intents, process restart alone and phone boot never schedule it.
+
+An unexpected physical close is retryable only after confirmed native GATT
+cleanup and while the logical run has not been stopped. The foreground service
+and ownership lease remain alive while the main-handler timer waits. Requested
+delays are 1, 2, 4, 8, 16, 30, 30… seconds; a successful handshake resets them to
+1 second. CPU sleep/system scheduling may defer timer delivery; this is not a
+wake alarm or a wall-clock reconnection deadline. There is still no wake lock.
+
+At timer delivery the service re-reads the durable binding: connectionEnabled
+must be true, and deviceId/address must match this run's confirmed target.
+Permissions/notification availability are rechecked. Only one timer/attempt is
+allowed. Every retry creates a new transport and repeats Info identity validation,
+notification subscription and the correlated handshake. A typed
+`Connection.identityRejected()` flag makes an Info UUID mismatch terminal;
+uncertain GATT cleanup, unreadable/changed intent or missing permissions also
+stop retries rather than opening another GATT. No identity is silently replaced.
+
+`Trennen` in the UI or notification and `Gerät vergessen` retain the existing
+durable disable/tombstone-before-close actions. The close path always cancels the
+timer and current attempt, even if intent persistence failed. Epoch checks fence
+already delivered timers, and physical connection checks fence late READY/live/
+close callbacks. A cancelled run cannot re-enable its binding through a late
+handshake. The confirmed binding revision is carried forward after the first
+handshake so a later retry does not fail against its own saved revision.
+
+The logical runId remains stable across retries, including the notification's
+Trennen action. Each physical attempt has a different connectionId in getState;
+reconnecting=true identifies retry waiting/connecting. The Android facade resets
+preview counters and journal capabilities when connectionId changes, even if a
+hidden WebView missed the entire retry. The common button remains Trennen and
+cancellable during native retries; browser sessions do not expose this flag and
+their behavior is unchanged. Explicit closeSession/unsafe journal cancellation
+ends this logical run as before; it does not start a retry loop.
+
+Targeted tests cover backoff/cap, one attempt, saved-intent/permission checks,
+Trennen while waiting/connecting, persistence failure, forget, stale timer/READY/
+physical callbacks, identity rejection and no startup from a saved flag alone.
+The on-device reconnect check is separate from the earlier storage/history
+experiments below: those earlier results do not verify reconnection.
+
+For that hardware check, connect the saved sensor and record its current bootId,
+then background the UI, lock the screen and restart the ESP32. Verify a closed
+attempt, a delayed retry with the same deviceId, a fresh handshake and saved
+receipts with the new bootId during the locked interval. After notification/UI
+Trennen, restart the ESP32 again and observe at least 60 seconds: no new attempt,
+no new receipts, service stopped and saved connectionEnabled=false. Inspect only
+a read-only database snapshot after the service/write queue has stopped.
+
+Initial reconnect verification passed 40 targeted app JVM tests (including 11
+reconnect cases), 6 transport race/identity tests and 35 UI/facade scenarios.
+After adding visible-app startup, the affected checks passed 26 app JVM tests
+(15 binding actions, 11 reconnect) and 35 native-session/platform UI tests.
+Production/USB-debug web assets and the main debug APK built successfully.
+The later POCO reconnect results are recorded separately below.
 
 ## Android permissions and notification
 
@@ -101,6 +168,7 @@ IO; first client attachment migrates/reads and polls, but never connects.
 | Method | Input / behavior |
 | --- | --- |
 | `requestPermissions()` | Visible Activity only; requests CONNECT on API 31+ and POST_NOTIFICATIONS on API 33+. Resolves state and never starts a service. |
+| `startSaved({ revision })` | Visible-app startup only. Atomically rechecks current binding revision, enabled intent, permissions and idle ownership on the native command queue. Stale/disabled/forgotten/active requests are no-ops. Uses saved MAC/UUID and the normal handshake. No permission prompt. |
 | `start({ bleAddress, expectedDeviceId? })` | Requires completed binding migration. Explicit MAC address; the persisted UUID is enforced, plus any explicit expectation. Returns starting state with runId; poll getState. New identity/address and enabled intent are saved only after STATUS. |
 | `getState()` | Returns a snapshot; no start, new GATT, subscription or persistence. |
 | `getLiveHistory({fromMs, toMs, sort?, pageSize, deviceId?, cursor?})` | Reads native SQLite on an independent worker, without a BLE run, permissions or binding migration. Calendar bounds are decimal millisecond strings, `[fromMs, toMs)`. Sort: `time-desc` (default), `time-asc`, `ppm-desc`, `ppm-asc`; pageSize 1–50. Returns `{items, nextCursor}`. |
@@ -120,6 +188,7 @@ Snapshot fields: `state` (`stopped`, `starting`, `connecting`, `ready`, `stoppin
 `error`), `owner` (`none`, `legacy`, `service`), `runId`, `bleAddress`, `deviceId`
 (only after STATUS handshake), `reason`, `bindingError`, `liveStorageError`, `permissionsGranted`, `lastSample`,
 `sampleAvailable`, `nowElapsedMs`, negotiated `info`, and correlated `status`.
+`connectionId` identifies the physical attempt; `reconnecting` marks a live native retry cycle.
 No numeric uint64 crosses the bridge.
 
 Example `lastSample` (null until a valid post-handshake preview):
@@ -186,7 +255,7 @@ Activity/WebView does not own or shut down the queue. The last storage failure
 is logged and remains in `getState().liveStorageError` across subsequent reads,
 successful writes and new sessions within the process. Reading this field does
 not perform disk IO. The shared Android history UI uses the read-only reader below.
-There is no HTTP upload, reconnect,
+There is no HTTP upload, automatic process/boot startup,
 automatic retry of failed receipts, retention pruning or gap recovery in this path.
 
 Commit is the durability boundary: process death before commit can lose an
@@ -327,9 +396,63 @@ gate, not Android framework dispatch. Beyond the recorded POCO run above,
 permission edge cases, Activity recreation, deep Doze and radio-loss behavior
 still need device testing. An FGS improves process priority;
 it does not guarantee unlimited execution or survival of force-stop, process
-kill, OEM power management or radio loss. There is no wake lock or restart loop.
+kill or OEM power management. There is no wake lock or process/boot restart loop.
 
 Successful reception does not establish measurement accuracy. The SCD41 in this
 prototype previously had isopropanol on its membrane; its accuracy remains
 unverified, as described in the [frontend documentation](../README.md#simulator-tests-and-prototype-accuracy).
 This is a limitation of our sensor, not of LIVE_SAMPLE or the BLE protocol.
+
+## POCO reconnection verification (2026-11-16)
+
+On USB/ADB-connected POCO 2412DPC0AG, with ESP32 manually power-cycled and
+no backend involved, the screen was confirmed off/keyguard locked from
+13:06:19.930 to 13:12:29.739 CET. After GATT status 8, retries used
+1/2/4/8/16/30-second delays and repeated the handshake for the same deviceId.
+SQLite contained 22 receipts with a new bootId inside that locked interval,
+starting at 13:10:45.951 CET; receipts after unlocking were excluded.
+No LIVE_SAMPLE storage errors or duplicate keys were found.
+
+Notification Trennen was tested both during a connection attempt (cancelled)
+and while a 30-second retry timer waited. The saved log confirms that the timer
+was scheduled at 13:24:59.837 CET; its next attempt was due at 13:25:29.837 CET.
+After the user pressed Trennen in the notification with ESP32 still off, service
+absence was observed at 13:25:24.472 CET, before that deadline. The scheduled
+attempt never started; the binding read confirmed revision 18 and
+connectionEnabled=false.
+
+After the user confirmed ESP32 was switched on again, the phone-time observation
+interval was 13:27:34.148–13:28:38.315 CET (**64.167 seconds**). The continuous
+service log contained **zero BLE attempts** in that interval; all six periodic
+service observations showed the service absent. This completed the hardware
+timer-cancellation test, separately from cancellation of an in-flight attempt.
+These logs were rechecked after the visible-app-startup change; this earlier
+hardware run preceded that change and was not repeated on the updated APK.
+The read-only SQLite snapshot contained 1937 rows; the final receipt preceded
+the outage. Earlier rows were preserved. These observations concern a live
+service on USB power, not process/boot restart, unplugged battery operation or
+prolonged deep Doze. Raw logs/database copies stay outside the repository.
+
+## POCO visible-app startup verification (2026-11-16)
+
+The updated main debug APK (`de.lueftlotse.app`, not the isolated SQLite test
+package) was installed with `adb install -r`; app data was not cleared.
+With the phone unlocked, ESP32 available, existing grants and saved enabled
+intent, the app process was force-stopped only to exercise a cold opening.
+Opening MainActivity then connected without selection: state reached ready,
+Info deviceId matched the saved UUID and fresh CO2 was displayed. No direct
+bridge start command was injected; only normal app opening triggered startup.
+
+Returning from the launcher while already connected preserved both logical
+runId and physical connectionId, with the sample counter advancing. After
+Trennen through the normal UI button, revision 20 retained the saved identity
+with connectionEnabled=false. Another cold opening stayed stopped with no owner
+and an enabled Sensor selection button. Earlier notification Trennen had also
+persisted false (revision 18), and opening the updated app did not reconnect.
+UI and native state were inspected through the debug WebView; the OEM blocked
+ADB key injection, so launcher transitions used Activity intents. No security
+settings were changed. SQLite snapshots were taken only after service shutdown,
+read locally in read-only mode and passed quick_check; raw artifacts remain
+outside the repository. Missing-grant and forgotten-binding startup guards were
+covered by targeted tests, without revoking real phone grants or deleting its
+real binding. No backend or adb reverse was used for these checks.

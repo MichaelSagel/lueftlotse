@@ -8,7 +8,7 @@ import android.os.*;
 import java.io.IOException;
 import java.util.Map;
 
-/** Process session state and one native binding repository. No automatic startup. */
+/** Process session state and one native binding repository. No process/boot startup. */
 public final class BleServiceRuntime {
     public static final BleOwnership OWNERSHIP = new BleOwnership();
     static final BleServiceState STATE = new BleServiceState(OWNERSHIP);
@@ -80,8 +80,17 @@ public final class BleServiceRuntime {
         } catch (RuntimeException error) { STATE.failBeforeOpen(run.id, error.toString()); throw error; }
         MAIN.postDelayed(() -> STATE.failBeforeOpen(run.id, "Start des Sensor-Dienstes dauerte zu lange"), 10000);
     }
+    static void startSaved(Context context, boolean visible, String revision) throws IOException {
+        onMain();
+        NativeBindingRepository.Binding saved = bindingActions(context).automaticBinding(
+            NativeBindingRepository.revision(revision), visible, permitted(context)
+        );
+        if (saved != null) {
+            start(context, visible, saved.bleAddress, saved.deviceId);
+        }
+    }
     static void disconnect(String id, String reason) {
         onMain(); if (!STATE.stop(id, reason)) return;
-        if (host != null) host.disconnectRun(id);
+        if (host != null) host.disconnectRun(id, reason);
     }
 }

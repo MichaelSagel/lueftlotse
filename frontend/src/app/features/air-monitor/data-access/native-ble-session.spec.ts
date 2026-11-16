@@ -57,6 +57,7 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     snapshot = { state: 'ready', runId: crypto.randomUUID(), info, status, lastSample: null, sampleAvailable: false, nowElapsedMs: '1000', reason: null, bindingError: null, permissionsGranted: true };
     bridge = {
       getState: vi.fn(async () => snapshot), start: vi.fn(async () => snapshot),
+      startSaved: vi.fn(async () => snapshot),
       requestPermissions: vi.fn(async () => snapshot),
       disconnect: vi.fn(async () => snapshot = { ...snapshot, state: 'stopped' }), closeSession: vi.fn(async () => snapshot = { ...snapshot, state: 'stopped' }),
       getBinding: vi.fn(async () => ({ migrationComplete, revision: migrationComplete ? '1' : '0', binding: null })),
@@ -109,6 +110,78 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
       { provide: Co2History, useValue: { imported: vi.fn(async () => {}) } }] });
     return TestBed.inject(NativeBleSession);
   }
+  function savedForOpening(enabled = true) {
+    const binding = {
+      version: 1 as const,
+      deviceId: ID,
+      bleAddress: '01:23:45:67:89:AB',
+      connectionEnabled: enabled,
+    };
+    vi.mocked(bridge.getBinding).mockResolvedValue({ migrationComplete: true, revision: '7', binding });
+    snapshot = { ...snapshot, state: 'stopped', runId: null };
+    return binding;
+  }
+  it('starts the saved enabled sensor on opening without a picker or permission prompt', async () => {
+    savedForOpening();
+    const session = configure();
+    session.attachClient();
+    session.attachClient();
+    await vi.waitFor(() => expect(bridge.startSaved).toHaveBeenCalledExactlyOnceWith({ revision: '7' }));
+    expect(bridge.start).not.toHaveBeenCalled();
+    expect(bridge.requestPermissions).not.toHaveBeenCalled();
+  });
+  it.each(['starting', 'connecting', 'ready'] as const)('does not duplicate a %s service on opening', async state => {
+    savedForOpening();
+    snapshot = { ...snapshot, state, runId: crypto.randomUUID() };
+    const session = configure();
+    session.attachClient();
+    await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
+    await vi.waitFor(() => expect(bridge.getState).toHaveBeenCalled());
+    expect(bridge.startSaved).not.toHaveBeenCalled();
+  });
+  it('does not duplicate a service waiting to reconnect', async () => {
+    savedForOpening();
+    snapshot = { ...snapshot, state: 'connecting', runId: crypto.randomUUID(), reconnecting: true };
+    const session = configure();
+    session.attachClient();
+    await vi.waitFor(() => expect(session.reconnecting()).toBe(true));
+    expect(bridge.startSaved).not.toHaveBeenCalled();
+  });
+  it('leaves a manual connection available when automatic startup lacks permissions', async () => {
+    savedForOpening();
+    snapshot = { ...snapshot, permissionsGranted: false };
+    const session = configure();
+    const client = session.attachClient();
+    await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
+    expect(bridge.startSaved).not.toHaveBeenCalled();
+    expect(bridge.requestPermissions).not.toHaveBeenCalled();
+    await expect(client.connect('01:23:45:67:89:AB')).rejects.toThrow('permissions');
+    expect(bridge.requestPermissions).toHaveBeenCalledOnce();
+  });
+  it('does not start a disabled or forgotten sensor when the app is reopened', async () => {
+    savedForOpening(false);
+    const session = configure();
+    session.attachClient();
+    await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(bridge.getBinding).toHaveBeenCalledTimes(4));
+    expect(bridge.startSaved).not.toHaveBeenCalled();
+    vi.mocked(bridge.getBinding).mockResolvedValue({ migrationComplete: true, revision: '8', binding: null });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(session.binding()).toBeNull());
+    expect(bridge.startSaved).not.toHaveBeenCalled();
+  });
+  it('cancels an opening request if Trennen happens while the binding is loading', async () => {
+    savedForOpening();
+    const loading = deferred<Awaited<ReturnType<BleServiceSessionBridge['getBinding']>>>();
+    vi.mocked(bridge.getBinding).mockReturnValue(loading.promise);
+    const session = configure();
+    const client = session.attachClient();
+    const disconnected = client.disconnectByUser();
+    loading.resolve({ migrationComplete: true, revision: '8', binding: null });
+    await disconnected;
+    expect(bridge.startSaved).not.toHaveBeenCalled();
+  });
   it('runs the unchanged BatchReceiver atomic commit before ACK and awaits ACK_ACCEPTED before the next FETCH', async () => {
     const link = lease(), p = await packet(link); const ack = ackFor(p);
     ackAccepted = deferred();
@@ -237,6 +310,39 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     snapshot = { ...snapshot, nowElapsedMs: '17000', sampleAvailable: false }; await vi.advanceTimersByTimeAsync(1000);
     expect(preview.at(-1)).toEqual({ kind: 'unavailable', reason: 'stale' }); expect(bridge.journalFetch).not.toHaveBeenCalled();
     vi.useRealTimers(); expect(await storage.count()).toBe(0);
+  });
+  it('resets sample counters and leases for a new physical connection within the same native run', async () => {
+    vi.useFakeTimers();
+    const sample = { type: 0x8a, bootId: ID, sampleCounter: '100', uptimeMs: '10000', ppm: 2100, receivedAtElapsedMs: '1000' };
+    snapshot = { ...snapshot, connectionId: 'physical-1', lastSample: sample, sampleAvailable: true };
+    const session = configure();
+    const preview: { kind: string; sample?: { sampleCounter: bigint } }[] = [];
+    session.previewEvents.subscribe(event => preview.push(event));
+    const client = session.attachClient();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
+    expect(session.bindingError()).toBeNull();
+    const oldLease = client.journal();
+    snapshot = {
+      ...snapshot,
+      connectionId: 'physical-2',
+      status: { ...status, bootId: '11112233-4455-4677-8899-aabbccddeeff' },
+      lastSample: { ...sample, bootId: '11112233-4455-4677-8899-aabbccddeeff', sampleCounter: '1', uptimeMs: '10', receivedAtElapsedMs: '2000' },
+      nowElapsedMs: '2000',
+    };
+    // The UI can miss the whole retry phase while hidden; physical identity still resets its preview.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(oldLease.signal.aborted).toBe(true);
+    expect(preview.filter(event => event.kind === 'sample').at(-1)?.sample?.sampleCounter).toBe(1n);
+    snapshot = { ...snapshot, state: 'connecting', reconnecting: true, connectionId: null, info: null, status: null, lastSample: null };
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(session.reconnecting()).toBe(true);
+    await expect(client.connect('01:23:45:67:89:AB')).rejects.toThrow('Native connection unavailable');
+    expect(bridge.start).not.toHaveBeenCalled();
+    await client.disconnectByUser();
+    expect(bridge.disconnect).toHaveBeenCalledWith({ runId: snapshot.runId });
+    client.revoke();
+    vi.useRealTimers();
   });
   it('ignores a snapshot issued for a previous group of attached clients', async () => {
     vi.useFakeTimers(); const old = deferred<NativeServiceState>();

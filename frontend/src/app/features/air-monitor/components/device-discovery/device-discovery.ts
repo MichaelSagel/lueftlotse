@@ -6,8 +6,8 @@ import { BLE_SESSION } from '../../data-access/ble-session';
 @Component({
   selector: 'app-device-discovery',
   template: `
-    <button type="button" class="connection-action" (click)="connection.state() === 'ready' ? disconnect() : selectSensor()" [disabled]="busy()">
-      {{ connection.state() === 'ready' ? 'Trennen' : 'Sensor auswählen' }}
+    <button type="button" class="connection-action" (click)="disconnectable() ? disconnect() : selectSensor()" [disabled]="busy()">
+      {{ disconnectable() ? 'Trennen' : 'Sensor auswählen' }}
     </button>
     @if (webError() || errorText(); as error) { <p role="alert">{{ error }}</p> }
     @if (scanner.available) {
@@ -51,7 +51,9 @@ export class DeviceDiscovery {
   private readonly selecting = signal(false);
   private readonly actionError = signal<string | null>(null);
   protected readonly webError = computed(() => this.scanner.available ? null : this.web?.error());
-  protected readonly busy = computed(() => this.pending() || this.selecting() || this.scanner.busy() || this.connection.bindingLoading() || this.connection.state() === 'connecting' || this.connection.phase() === 'closing');
+  protected readonly disconnectable = computed(() => this.connection.state() === 'ready' || this.connection.reconnecting?.() === true);
+  protected readonly busy = computed(() => this.pending() || this.selecting() || this.scanner.busy() || this.connection.bindingLoading()
+    || (this.connection.state() === 'connecting' && !this.connection.reconnecting?.()) || this.connection.phase() === 'closing');
   constructor() {
     inject(DestroyRef).onDestroy(() => {
       this.client.revoke();
@@ -59,7 +61,7 @@ export class DeviceDiscovery {
     });
   }
   protected async selectSensor(): Promise<void> {
-    if (this.busy() || this.connection.state() === 'ready') return;
+    if (this.busy() || this.disconnectable()) return;
     this.actionError.set(null);
     if (!this.scanner.available) {
       if (!this.web) return;
@@ -76,7 +78,7 @@ export class DeviceDiscovery {
     catch (error) { this.actionError.set(String(error)); }
   }
   protected async connect(id:string): Promise<void> {
-    if (this.pending() || this.scanner.busy() || this.connection.bindingLoading() || this.connection.state() === 'ready') return;
+    if (this.pending() || this.scanner.busy() || this.connection.bindingLoading() || this.disconnectable()) return;
     this.pending.set(true); this.actionError.set(null);
     try {
       await this.scanner.stop();

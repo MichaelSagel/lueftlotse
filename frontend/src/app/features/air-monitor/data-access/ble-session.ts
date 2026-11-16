@@ -98,6 +98,8 @@ export interface BleSessionClient {
 
 export interface BleSession {
   readonly state: Signal<BleState>;
+  /** Native service retry cycle; absent in browser sessions. */
+  readonly reconnecting?: Signal<boolean>;
   readonly phase: Signal<BlePhase>;
   readonly info: Signal<Info | null>;
   readonly status: Signal<BleStatus | null>;

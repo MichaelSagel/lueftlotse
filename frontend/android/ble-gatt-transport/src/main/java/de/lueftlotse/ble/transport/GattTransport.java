@@ -32,6 +32,7 @@ public final class GattTransport implements AutoCloseable {
         private final CompletableFuture<Void> closed = new CompletableFuture<>();
         private volatile State state = State.CONNECTING;
         private volatile boolean cleaned;
+        private volatile boolean identityRejected;
         private GattBoundary.Link link;
         private SerialLoop.Timer timer;
         private long deadline;
@@ -45,6 +46,7 @@ public final class GattTransport implements AutoCloseable {
             this.owner = owner; this.address = address; this.expectedDeviceId = expectedDeviceId;
         }
         public State state() { return state; }
+        public boolean identityRejected() { return identityRejected; }
         public CompletionStage<Codec.Info> ready() { return ready.thenApply(value -> value); }
         public CompletionStage<Void> closed() { return closed.thenApply(value -> value); }
         public void cancel() { owner.cancel(this, "Connection cancelled"); }
@@ -140,7 +142,10 @@ public final class GattTransport implements AutoCloseable {
                     expect(c, State.READING_INFO, status);
                     if (copy == null) throw new IllegalStateException("Missing/oversized Info");
                     c.info = Codec.decodeInfo(copy); c.infoBytes = copy;
-                    if (c.expectedDeviceId != null && !c.expectedDeviceId.equals(c.info.deviceId)) throw new IllegalStateException("Info UUID mismatch");
+                    if (c.expectedDeviceId != null && !c.expectedDeviceId.equals(c.info.deviceId)) {
+                        c.identityRejected = true;
+                        throw new IllegalStateException("Info UUID mismatch");
+                    }
                     accepted(c.link.enableLocalNotifications(), "Local Events subscription");
                     phase(c, State.SUBSCRIBING, OPERATION_TIMEOUT_MS); accepted(c.link.writeNotificationCccd(), "CCCD write");
                 });

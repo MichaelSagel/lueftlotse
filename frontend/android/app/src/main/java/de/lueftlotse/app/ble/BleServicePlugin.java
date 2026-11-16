@@ -10,7 +10,7 @@ import de.lueftlotse.ble.Codec;
 import de.lueftlotse.ble.UInt64;
 import java.util.concurrent.CompletionStage;
 
-/** Local bridge. The Android UI coordinates migration; starting a connection is always explicit. */
+/** Local bridge. The Android UI coordinates migration and visible-app startup. */
 @CapacitorPlugin(name = "BleService", permissions = {
     @Permission(alias = "bleConnect", strings = {"android.permission.BLUETOOTH_CONNECT"}),
     @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"})
@@ -30,6 +30,16 @@ public final class BleServicePlugin extends Plugin {
                 BleServiceRuntime.start(getContext().getApplicationContext(), visible(), call.getString("bleAddress"), call.getString("expectedDeviceId"));
                 resolveState(call);
             } catch (Exception error) { call.reject(error.getMessage(), error); }
+        });
+    }
+    @PluginMethod public void startSaved(PluginCall call) {
+        BleServiceRuntime.MAIN.post(() -> {
+            try {
+                BleServiceRuntime.startSaved(getContext().getApplicationContext(), visible(), call.getString("revision"));
+                resolveState(call);
+            } catch (Exception error) {
+                call.reject(error.getMessage(), error);
+            }
         });
     }
     @PluginMethod public void disconnect(PluginCall call) {

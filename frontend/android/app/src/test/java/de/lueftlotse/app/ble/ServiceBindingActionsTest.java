@@ -19,6 +19,34 @@ public class ServiceBindingActionsTest {
         BleServiceState.Run run = state.reserve(true, true, NEXT, existing ? ID : null, saved.revision);
         state.open(run.id, true); disk.trace.clear(); return run;
     }
+    @Test public void openingUsesEnabledSavedIdentityWithoutChangingBinding() throws Exception {
+        NativeBindingRepository.Snapshot saved = repo.migrate(binding());
+        disk.trace.clear();
+        NativeBindingRepository.Binding selected = actions.automaticBinding(saved.revision, true, true);
+        assertEquals(ID, selected.deviceId);
+        assertEquals(ADDRESS, selected.bleAddress);
+        assertTrue(disk.trace.isEmpty());
+        assertNull(actions.automaticBinding(saved.revision, false, true));
+        assertNull(actions.automaticBinding(saved.revision, true, false));
+    }
+    @Test public void openingDoesNotDuplicateStartingReadyOrRetryingService() throws Exception {
+        NativeBindingRepository.Snapshot saved = repo.migrate(binding());
+        BleServiceState.Run run = state.reserve(true, true, ADDRESS, ID, saved.revision);
+        assertNull(actions.automaticBinding(saved.revision, true, true));
+        state.open(run.id, true);
+        assertTrue(actions.ready(run.id, new Codec.Info(1, ID, 31)));
+        assertNull(actions.automaticBinding(repo.read().revision, true, true));
+        state.reconnecting(run.id, "radio lost");
+        assertNull(actions.automaticBinding(repo.read().revision, true, true));
+    }
+    @Test public void openingCannotResurrectDisabledOrForgottenBindingIncludingStaleRequests() throws Exception {
+        NativeBindingRepository.Snapshot saved = repo.migrate(binding());
+        actions.disconnectSaved(saved.revision);
+        assertNull(actions.automaticBinding(saved.revision, true, true));
+        assertNull(actions.automaticBinding(repo.read().revision, true, true));
+        actions.forget(repo.read().revision);
+        assertNull(actions.automaticBinding(repo.read().revision, true, true));
+    }
     @Test public void newIdentityAndAddressAreNotSavedBeforeStatus() throws Exception {
         BleServiceState.Run run = connecting(false); assertNull(repo.read().binding);
         assertTrue(actions.ready(run.id, new Codec.Info(1, ID, 31)));

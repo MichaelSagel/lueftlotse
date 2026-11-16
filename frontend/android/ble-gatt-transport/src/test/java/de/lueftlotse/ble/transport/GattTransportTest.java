@@ -8,6 +8,17 @@ import static de.lueftlotse.ble.transport.FakeGatt.*;
 import static org.junit.Assert.*;
 
 public class GattTransportTest {
+    @Test public void identityMismatchIsClassifiedBeforeSubscriptionForServiceRetryPolicy() {
+        Harness h = new Harness();
+        h.start();
+        h.link.connected();
+        h.link.discovered();
+        h.link.read(Codec.encodeInfo(new Codec.Info(1, "11112233-4455-4677-8899-aabbccddeeff", 16)));
+        h.closed();
+        assertTrue(h.connection.identityRejected());
+        assertFalse(h.boundary.calls.contains("cccd"));
+    }
+
     @Test public void liveTimestampIsFinalFrameArrivalNotDelayedQueueProcessing() {
         Harness h = new Harness(); h.ready(); h.loop.time = 100;
         for (byte[] frame : Wire.fragment(sample(1), h.link.eventId++, Wire.Direction.EVENTS)) h.link.callback.events(frame);

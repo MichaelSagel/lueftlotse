@@ -17,10 +17,13 @@ export interface NativeServiceState {
   runId: string | null; info: unknown; status: unknown; lastSample: unknown;
   sampleAvailable: boolean; nowElapsedMs: string; reason: string | null; bindingError: string | null;
   permissionsGranted: boolean;
+  connectionId?: string | null;
+  reconnecting?: boolean;
 }
 export interface BleServiceSessionBridge extends BleServiceBindingBridge {
   getState(): Promise<NativeServiceState>;
   start(input: { bleAddress: string; expectedDeviceId?: string }): Promise<NativeServiceState>;
+  startSaved(input: { revision: string }): Promise<NativeServiceState>;
   disconnect(input: { runId?: string; revision?: string }): Promise<NativeServiceState>;
   requestPermissions(): Promise<NativeServiceState>;
   closeSession(input: { runId: string }): Promise<NativeServiceState>;

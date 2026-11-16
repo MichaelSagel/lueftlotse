@@ -9,7 +9,7 @@ public final class BleServiceState {
     public enum Phase { STOPPED, STARTING, CONNECTING, READY, STOPPING, ERROR }
     public static final class Run {
         public final String id = UUID.randomUUID().toString(), address, expectedDeviceId;
-        public final BigInteger bindingRevision;
+        public BigInteger bindingRevision;
         private final BleOwnership.Lease lease;
         private boolean opened, stopping, closed;
         private Run(String address, String expected, BleOwnership.Lease lease, BigInteger revision) {
@@ -26,6 +26,8 @@ public final class BleServiceState {
     private String reason;
     private String bindingError;
     private String liveStorageError;
+    private String connectionId;
+    private boolean reconnecting;
     private long receivedAt;
     public BleServiceState(BleOwnership ownership) { this.ownership = ownership; }
     public synchronized Run reserve(boolean visible, boolean permitted, String address, String expected) {
@@ -38,6 +40,8 @@ public final class BleServiceState {
         if (address == null || !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) throw new IllegalArgumentException("Ungültige BLE-Adresse");
         String expectedId = expected == null ? null : Codec.uuid(expected);
         run = new Run(address, expectedId, ownership.acquire(BleOwnership.Owner.SERVICE), revision);
+        connectionId = null;
+        reconnecting = false;
         phase = Phase.STARTING; info = null; status = null; sample = null; sampleValid = false; reason = null; bindingError = null; return run;
     }
     public synchronized boolean active() { return run != null && ownership.owns(run.lease); }
@@ -45,6 +49,39 @@ public final class BleServiceState {
     public synchronized boolean matches(String id) { return active() && run.id.equals(id); }
     public synchronized boolean canBecomeReady(String id) { return matches(id) && !run.stopping && phase == Phase.CONNECTING; }
     public synchronized boolean canStop(String id) { return matches(id) && !run.stopping; }
+    public synchronized boolean stopping(String id) {
+        return !matches(id) || run.stopping;
+    }
+
+    public synchronized void confirmedBinding(String id, BigInteger revision) {
+        if (canBecomeReady(id)) {
+            run.bindingRevision = revision;
+        }
+    }
+
+    public synchronized void connectionStarted(String id, String connection) {
+        if (canBecomeReady(id)) {
+            connectionId = connection;
+        }
+    }
+
+    public synchronized boolean matchesConnection(String id, String connection) {
+        return matches(id) && !run.stopping && connectionId != null && connectionId.equals(connection);
+    }
+
+    public synchronized void reconnecting(String id, String why) {
+        if (!matches(id) || run.stopping) {
+            return;
+        }
+        phase = Phase.CONNECTING;
+        reconnecting = true;
+        connectionId = null;
+        info = null;
+        status = null;
+        sample = null;
+        sampleValid = false;
+        reason = why;
+    }
     public synchronized void bindingError(String error) { bindingError = error; }
     public synchronized void liveStorageError(String error) {
         liveStorageError = error;
@@ -72,12 +109,14 @@ public final class BleServiceState {
     public synchronized boolean stop(String id, String why) {
         if (!matches(id) || run.stopping) return false;
         run.stopping = true; reason = why;
+        reconnecting = false;
         if (!run.opened) { ownership.release(run.lease); phase = Phase.STOPPED; }
         else phase = Phase.STOPPING;
         return true;
     }
     public synchronized void ready(String id, Codec.Info value) {
         if (!matches(id) || run.stopping || phase != Phase.CONNECTING) return; info = value; phase = Phase.READY;
+        reconnecting = false;
     }
     public synchronized void live(String id, Codec.Message value, long arrival) {
         if (!matches(id) || run.stopping || phase != Phase.READY || value.type != 0x8a || arrival < 0) return;
@@ -95,6 +134,7 @@ public final class BleServiceState {
     public synchronized void closed(String id, boolean clean, String why) {
         if (!matches(id) || run.closed) return;
         run.closed = true;
+        reconnecting = false;
         if (clean) ownership.release(run.lease);
         phase = clean ? Phase.STOPPED : Phase.ERROR; reason = why; run.stopping = true;
     }
@@ -107,6 +147,8 @@ public final class BleServiceState {
         result.put("status", status == null ? null : status.toBridge());
         result.put("bindingError", bindingError);
         result.put("liveStorageError", liveStorageError);
+        result.put("connectionId", connectionId);
+        result.put("reconnecting", reconnecting);
         result.put("lastSample", sample); result.put("nowElapsedMs", Long.toString(now));
         result.put("sampleAvailable", phase == Phase.READY && sampleValid && sample != null && now >= receivedAt && now - receivedAt < 15000);
         return Collections.unmodifiableMap(result);
