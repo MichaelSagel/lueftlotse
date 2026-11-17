@@ -19,11 +19,17 @@ export interface NativeServiceState {
   permissionsGranted: boolean;
   connectionId?: string | null;
   reconnecting?: boolean;
+  discoveryPermissionsGranted?: boolean;
+  backgroundLocationMissing?: boolean;
+  discoveryMode?: 'searching' | 'connecting' | 'choice' | null;
+  candidates?: { address: string; name: string }[];
 }
 export interface BleServiceSessionBridge extends BleServiceBindingBridge {
   getState(): Promise<NativeServiceState>;
   start(input: { bleAddress: string; expectedDeviceId?: string }): Promise<NativeServiceState>;
   startSaved(input: { revision: string }): Promise<NativeServiceState>;
+  startDiscovery(input: { revision: string; manual: boolean }): Promise<NativeServiceState>;
+  chooseSensor(input: { runId: string; address: string }): Promise<NativeServiceState>;
   disconnect(input: { runId?: string; revision?: string }): Promise<NativeServiceState>;
   requestPermissions(): Promise<NativeServiceState>;
   closeSession(input: { runId: string }): Promise<NativeServiceState>;

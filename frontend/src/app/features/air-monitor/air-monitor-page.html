@@ -1,10 +1,29 @@
-﻿<main class="dashboard">
+﻿<main
+  class="dashboard"
+  (touchstart)="startPull($event)"
+  (touchmove)="movePull($event)"
+  (touchend)="finishPull($event)"
+  (touchcancel)="cancelPull()"
+>
   <header>
     <p class="eyebrow">RAUMLUFT IM BLICK</p>
     <h1>Lüftlotse</h1>
   </header>
   <div class="dashboard-columns">
     <div class="sensor-column">
+      @if (android) {
+        <div
+          class="pull-indicator"
+          [class.visible]="pullVisible()"
+          [style.height.px]="pullHeight()"
+          aria-hidden="true"
+        >
+          <span
+            class="pull-ring"
+            [class.spinning]="pullSpinning()"
+          ></span>
+        </div>
+      }
       <section
         [class]="'reading ' + status().color"
         aria-labelledby="co2-label"
@@ -19,7 +38,7 @@
             class="dot"
             aria-hidden="true"
           ></span>{{ status().label }}</p>
-        <p class="hint">{{ status().hint }}</p>
+        <p class="hint">{{ searching() ? 'Sensor wird gesucht …' : status().hint }}</p>
       </section>
     </div>
     <div class="history-column">

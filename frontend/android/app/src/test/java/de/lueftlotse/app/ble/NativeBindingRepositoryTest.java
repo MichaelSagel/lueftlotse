@@ -7,6 +7,43 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NativeBindingRepositoryTest {
+    @Test public void unboundTrennenPersistsAndManualEnableOrForgetRearms() throws Exception {
+        Memory disk = new Memory();
+        NativeBindingRepository repository = new NativeBindingRepository(disk);
+        repository.migrate(null);
+        NativeBindingRepository.Snapshot stopped = repository.disableConnection();
+        assertNull(stopped.binding);
+        assertFalse(new NativeBindingRepository(disk).read().connectionEnabled);
+        assertTrue(repository.enableConnection(stopped.revision).connectionEnabled);
+        repository.disableConnection();
+        assertTrue(repository.forget(repository.read().revision).connectionEnabled);
+    }
+    @Test public void existingV1BindingAndDisabledIntentRemainReadableWithoutRewrite() throws Exception {
+        Memory disk = new Memory();
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeInt(0x424c4231);
+        out.writeBoolean(true);
+        out.writeUTF("7");
+        out.writeBoolean(true);
+        out.writeUTF(ID);
+        out.writeUTF(ADDRESS);
+        out.writeBoolean(false);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(bytes.toByteArray());
+        out.writeInt((int) crc.getValue());
+        disk.disk = bytes.toByteArray();
+        NativeBindingRepository repository = new NativeBindingRepository(disk);
+        NativeBindingRepository.Snapshot read = repository.read();
+        assertFalse(read.connectionEnabled);
+        assertEquals(ID, read.binding.deviceId);
+        assertEquals(ADDRESS, read.binding.bleAddress);
+        assertEquals(0, disk.writes);
+        NativeBindingRepository.Snapshot enabled = repository.enableConnection(read.revision);
+        assertTrue(new NativeBindingRepository(disk).read().connectionEnabled);
+        assertEquals(ID, enabled.binding.deviceId);
+        assertEquals(new BigInteger("8"), enabled.revision);
+    }
     static final String ID = "00112233-4455-4677-8899-aabbccddeeff", OTHER = "11223344-5566-4788-99aa-bbccddeeff00";
     static final String ADDRESS = "AA:BB:CC:DD:EE:01", NEXT = "AA:BB:CC:DD:EE:02";
     static NativeBindingRepository.Binding binding() { return new NativeBindingRepository.Binding(ID, ADDRESS, true); }

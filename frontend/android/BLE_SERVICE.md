@@ -13,11 +13,13 @@ page, discovery and manual journal download. Attaching the first UI reader runs
 the idempotent [binding migration](BLE_BINDING.md), including a confirmed empty
 binding. Migration/read/deletion errors block connection with a German message;
 there is no fallback transport. Migration itself never starts GATT. After migration,
-opening/returning to the visible Android app checks the saved connection intent
-and existing permissions. If enabled and idle, it connects to the saved sensor
-without selection or permission dialogs. Missing permissions leave manual selection
-available. An active, starting or retrying service is only reattached. **Sensor auswählen**
-followed by device selection explicitly starts the connection. Browser routes select `BrowserBleSession`: history
+opening/returning to the visible Android app checks existing permissions and
+reattaches an active, starting or retrying service without duplication. If idle,
+a new opening enables connection intent again, including after Trennen. Polling
+never enables it. No Android connection-control button or device list is shown.
+A downward pull invokes the existing native automatic-start command, resuming
+an idle connection and preserving an active/searching run.
+Browser routes select `BrowserBleSession`: history
 remains accessible, but native calls and migration are forbidden.
 
 The service receives and stores LIVE_SAMPLE independently of the WebView.
@@ -59,7 +61,253 @@ retained. The service stops and removes its notification after terminal cleanup
 and accepted writes drain. A pending start has a 10-second deadline, while
 transport connection/operation/core deadlines remain in force.
 
-## Reconnection inside a live service
+## Native automatic discovery and connection
+
+The Android route calls `startDiscovery({revision, manual})`, after draining any
+legacy plugin scan through `BleScanner.holdStopped()`. `SensorBleService` owns
+the entire new search/connection loop under its SERVICE ownership lease; no
+WebView timer or plugin scanner is needed after startup. The normal Android UI
+has no sensor-selection dialog, device list, Verbinden or forget button.
+During discovery the CO2 card shows **Sensor wird gesucht …**. There are no
+connection buttons on the Android main screen. The unchanged service notification
+retains **Trennen** to stop connection and search. Within the same visible opening,
+polling cannot restart them; pulling down, returning to the app or attaching
+a fresh UI starts again. A saved deviceId is checked on every handshake; no other identity is bound.
+
+With an enabled binding, the first attempt uses the saved address directly.
+After failure, `ServiceDiscovery` runs 8-second scan windows separated by
+1/2/4/8/16/30-second pauses (cap 30). Scan/timer/GATT attempts are serialized.
+`NativeSensorScanner` applies both an Android ScanFilter for `Codec.SERVICE`
+(`9c6b1000-7a3e-4d9f-8b52-6e210f42a001`) and an advertisement UUID check. Other
+advertisers are never sent to the UI. GATT opens only after scan stop returns.
+Every saved-device attempt uses the persisted deviceId as the expected Info
+identity in the existing handshake, even if a discovered address changed.
+Wrong-identity/unsupported candidates are quarantined for this run; a different
+sensor is never silently bound. LIVE_SAMPLE support is checked before binding.
+
+With no binding, one service advertiser is connected automatically. Several
+advertisers pause discovery and expose only those candidates for explicit
+selection; protocol/identity compatibility is verified when connecting. No
+unfiltered device picker is opened. Choice commands carry the current runId;
+stale addresses are rejected. Each attempt repeats the regular handshake.
+
+Trennen from UI or notification disables durable connection intent, cancels the
+scan/timer and current GATT attempt, and fences late callbacks. Intent also
+persists when no sensor has ever been bound. The internal forget bridge remains available but has no Android UI action. No process/boot auto-start, SQLite migration or CO2-alert change is added.
+Scan permission is required (BLUETOOTH_SCAN on API 31+, fine location on older
+Android, plus background location on API 29–30). Android 11 users may need to
+select Standort / Immer zulassen in app settings; the UI explicitly reports
+this prerequisite rather than starting a scan without the required grant.
+Permission loss stops the loop. As before, no wake lock is taken.
+
+### Android pull-to-refresh (2026-11-17)
+
+The main screen has no connection controls in any state. A downward vertical
+single-finger pull of at least 80 CSS pixels, starting at scroll position zero
+outside form controls, invokes the existing NativeBleSession client command.
+Short, mostly horizontal, cancelled and multitouch gestures are ignored; an
+in-flight refresh blocks duplicate gestures. Active connection/search is retained
+without a second native run. Errors remain exposed by BLE_SESSION. Browser touch
+gestures do not invoke native connection commands. No native service, notification,
+SQLite or alert implementation was changed. Targeted checks: 13 connection-UI
+cases and 7 page cases passed. Production/USB-debug assets and the main debug APK built successfully;
+`adb install -r` updated the main package without clearing data. At the first
+attempt POCO was locked (NotificationShade/keyguard), so actual-device swipe
+verification initially waited for unlock. After the user opened the app, the
+actual POCO WebView showed only the history-loading button while connected
+(real value 687 ppm); no connection controls or device list were present.
+For a controlled idle baseline the existing native disconnect bridge was called:
+state became stopped/owner=none, binding revision 30 disabled. With the app kept
+visible, a downward touch sequence of 144 CSS pixels was injected through CDP
+Input.dispatchTouchEvent on the CO2 card at scroll position zero. No direct
+connect bridge command was used to substitute for the gesture. The gesture
+started run bab7a758-dc5d-4c12-939b-b0a7edd44c15, connection
+20d870b0-ccdc-44d2-962f-021c268c4d09. At 2026-11-17 15:09:12 CET it was ready
+with the same saved deviceId a521be49-defd-4474-9a29-aa15034d7da1, enabled binding
+revision 31, a fresh real sample (counter 1444, 696 ppm) and no binding/storage
+error. A second downward touch sequence while ready retained both runId and
+connectionId: no redundant connection was opened. The rendered screen still
+contained only history loading. This was an actual-phone gesture test injected
+through DevTools, not a physical finger gesture or synthetic sensor data.
+The Android notification implementation was unchanged.
+
+### Android pull indicator (2026-11-17)
+
+An Android-only decorative ring expands above the CO2 card as a downward pull
+progresses. A qualifying pull latches the visual indicator while the existing
+connection request or native connecting/reconnecting state is active. When that
+state ends, or a gesture is cancelled/already connected, opacity and height ease
+to zero over 200 ms. The ring adds no text, buttons or live region. Reduced-motion
+preferences disable transitions/rotation. No native connection/notification,
+storage, alert or browser behavior was changed.
+
+Eight targeted page tests passed, including appearance, cancellation, retention
+through connecting, disappearance at ready and absence in browsers. Production,
+USB-debug assets and the main debug APK built; adb install -r updated POCO without
+clearing data. Hardware checks used CDP Input touch events in the actual WebView,
+not synthetic measurements or a direct-connect substitute. During pulling the
+ring was visible above the card (screenshot inspected). After cancellation its
+opacity was about 0.50 at the first sampled frame and zero after transition;
+with an already-ready connection the corresponding values were about 0.69 and
+zero. RunId and connectionId stayed unchanged in those cases.
+
+For the connecting case the existing disconnect bridge prepared a confirmed
+stopped baseline (binding revision 32). A downward touch gesture started run
+387598f3-91bd-4903-9b78-a3679d6508a1 and connection
+e474157a-4b7f-4689-ae39-70fcf7d48de4. The ring remained fully visible at height
+44 CSS pixels during startup; getAnimations reported running and its transform
+changed between sampled frames (animation times approximately 50 and 450 ms).
+At the later sample (roughly 1.8 seconds plus diagnostic overhead), native state
+was ready for the saved deviceId and the indicator had opacity/height zero with
+no running animation. No binding/storage error was reported. This verifies the
+normal connect/handshake interval; a prolonged unavailable-sensor scan was not
+repeated for this visual change. Temporary diagnostic scripts/screenshots remain
+outside the repository. git diff --check passed.
+
+### Current connect/forget-free UI verification (2026-11-17)
+
+The changed UI/facade/page checks passed (50 tests at the first checkpoint).
+The visibility guard then passed all 37 native-facade tests; the CO2-card status
+check passed with all 5 page tests. An additional regression for first visibility
+of a WebView created behind the lock screen passed (37 other cases skipped).
+Production/USB-debug assets and the main debug APK built successfully.
+`adb install -r` updated `de.lueftlotse.app` on POCO without clearing data.
+The loaded DOM showed neither connect/forget buttons nor a device list.
+The phone was locked (NotificationShade/keyguard), and asynchronous bridge reads
+timed out. At that checkpoint hardware checks were pending user unlock; the completed
+current-APK sequence is recorded below, separately from older APK observations.
+No synthetic samples, SQLite changes, backend or adb reverse were used.
+
+POCO follow-up with the current APK: opening the unlocked app automatically
+reconnected the saved deviceId a521be49-defd-4474-9a29-aa15034d7da1; binding
+revision 27 was enabled. The rendered screen exposed only Trennen and history
+loading, with no connect/forget actions, dialog or BLE-device list. After the user
+removed ESP32 power, GATT closed with status 8 and the CO2 card displayed
+Sensor wird gesucht … with cancellable Trennen. Logs confirmed serialized
+8-second UUID-filtered scans and increasing pauses capped at 30 seconds.
+Initially the powered-on check had no matching scan results, so it was not
+reported as success. After the user confirmed ESP32 startup, the same logical
+run 3cf44fc4-a235-454c-937f-74da594d9fab found and handshook the saved identity
+without a UI command. At 2026-11-17 13:11:07 CET the bridge was ready with a new
+connectionId b7728c28-3138-49b5-b51b-aef9dbde3b65 and new bootId
+b1e5e488-4c0c-44e2-8e4e-ac46b2405b53 (previously
+8ef4d343-826f-4c88-be2b-1e418c222134). A real LIVE_SAMPLE counter 6, uptime
+31311 ms, 745 ppm was fresh; binding/storage errors were null. This verifies
+recovery after power-on, but not a precise latency from the user's switch action.
+Current-APK cancellation was then confirmed with ESP32 powered off: the user
+pressed Trennen in the open main app while native discovery was retrying. The
+bridge reported stopped, owner=none, reconnecting=false and discoveryMode=null;
+binding revision 28 retained the same UUID/address with connectionEnabled=false.
+No connection action or device list remained visible. After the user powered
+ESP32 back on, continuous observation from 2026-11-17 13:13:26.129 to
+13:14:38.845 CET (72.716 seconds) recorded zero SCAN_START and zero BLE attempt
+entries. The Python observer and its adb logcat child were verified alive during
+the interval. Final state remained stopped/owner=none with disabled revision 28,
+no binding/storage error and only the history-loading button. The app was kept
+open throughout; no UI/bridge command enabled connection. After the user backgrounded and reopened the app (ESP32 left on), the native
+service automatically started a new logical run db4c397c-9d9b-4558-9e18-625ea5f7d3cd
+and connection a8d3300e-fe63-4808-b7aa-ac81c16856e3 without a connect-button action.
+At 2026-11-17 13:15:29 CET it was ready with the same saved deviceId/address,
+binding revision 29 and connectionEnabled=true. A fresh real sample counter 27,
+uptime 132501 ms, 767 ppm was available and shown in the CO2 card; binding and
+storage errors were null. Only Trennen and history loading were visible, with
+no dialog or device list. Thus Trennen suppressed retries within the same opening,
+while a subsequent app opening resumed connection. No phone settings, app data,
+history implementation or CO2 alert code were changed for these observations.
+
+### Earlier UI verification (before removal of connect/forget buttons)
+
+The observations below refer to the preceding APK and its old button labels;
+they are preserved as hardware evidence, not as the current UI specification.
+
+Verification status (2026-11-17): the earlier binding/state/component/platform
+checks were retained. Remaining changed code passed 9 ServiceDiscovery JVM cases,
+36 native-facade cases, 3 new API-level discovery-permission cases and 2 selected
+legacy-permission UI cases. After restoring the browser's original binding-read
+button lock, the affected component passed 10 cases. One new routeDiscovery case
+confirmed a single native bridge start for multiple attached readers; the other
+platform cases were skipped rather than repeated. Production/USB-debug assets
+and the main debug APK built successfully; git diff --check passed.
+
+The APK package was checked as `de.lueftlotse.app`; native discovery classes were
+present and the temporary Co2Probe class absent. Its SHA-256 is
+`8e1d687524983569c187b892ac86ccda108e7ca1a791d40ca081a29750671d77`.
+ADB initially had no attached device, so installation was deferred. After POCO
+OZFQ4PHIE68HSWRW appeared as device, this exact main APK was installed with
+`adb install -r` successfully, without uninstall/data clearing. The old BLB1
+binding (revision 22, same saved UUID/address, connectionEnabled=false) remained
+readable. Opening showed Verbinden/Gerät vergessen, no picker and no connection,
+respecting the persisted Trennen. Normal UI Verbinden enabled intent and started
+the saved-UUID attempt; the UI then showed Sensor wird gesucht … with enabled
+Trennen and no device list. Logs showed serialized UUID-filtered 8-second scan
+windows and pauses capped at 30 seconds. The latest binding read retained the
+same identity/address with connectionEnabled=true.
+
+The controlled POCO cold-opening-with-ESP32-off, later power-on, nearby-foreign-
+device and Trennen-during-search observations were completed in the steps below.
+No phone data/settings were cleared. Prior POCO reconnect/notification experiments
+do not verify those new discovery-loop scenarios.
+
+During the first attempted off-at-opening check, the current service was closed
+without disabling intent and MainActivity was cold-started. The app automatically
+opened a new run/connection without a chooser, verified the same saved deviceId
+and received advancing real LIVE_SAMPLE counters (37 to 51, uptime 180541 to
+248001 ms, last reading 1245 ppm). The peripheral was therefore still reachable;
+this confirms saved-device automatic connection when available, not the required
+unavailable-at-opening case. At this stage a confirmed power-off was still needed.
+No conclusion about switched-off recovery is drawn from this first run.
+
+After the user confirmed full power removal, the established link closed with
+GATT status 8 and samples became unavailable. A second controlled cold opening
+preserved revision 25 / enabled intent and the saved UUID. Its direct connection
+attempt timed out after approximately 10.093 seconds, followed by a 1-second
+pause, an 8-second UUID-filtered scan, then a 2-second pause and the next window.
+The UI showed Sensor wird gesucht …, enabled Trennen and Gerät vergessen, with
+no open dialog or device list. No parallel GATT attempt appeared in the captured
+sequence. This confirmed the unavailable-at-opening phase before the power-on
+and cancellation checks below.
+
+After the user switched ESP32 back on without pressing Verbinden, the same
+logical run (`c34f81e4-cc30-4d84-aee8-ab3ea6749297`) completed a scan window,
+stopped scanning and opened one new GATT attempt. The service reached ready
+with the same saved Info UUID/address and unchanged binding revision 25.
+BootId changed from `b9ffa482-77bb-4c8e-afdb-2f80acb66402` to
+`9ec82145-935f-4722-b641-c4eec0ce944a`. Native state contained a fresh real
+LIVE_SAMPLE (counter 99, 1128 ppm, approximately 2284 ms old), with no binding
+or live-storage error. The keyguard/screen-off check showed the phone locked;
+the native service recovered without an active UI reader. The hidden WebView
+still displayed its old waiting text, so visible UI refresh after unlock is a
+separate observation, not inferred from the native sample. Search cancellation
+and nearby-foreign-device conditions were then checked as follows.
+
+For cancellation the peripheral was powered off again. The user's first report
+of pressing Trennen did not match main-app state: search continued and revision
+25 still had enabled intent. The cause of that initial action not reaching the
+main handler was not established. Retesting the existing main-app button via
+HTMLElement.click in its debug WebView exercised the normal UI handler and
+persisted revision **26**, connectionEnabled=false. The service stopped with
+owner=none, discoveryMode=null and the UI changed to enabled **Verbinden**.
+Cancellation occurred in a pause between scan windows; it does not establish
+that the initial physical tap succeeded. Active-scan/late-callback cancellation
+is additionally covered by the targeted JVM tests.
+
+After the user switched ESP32 on again, the phone-time observation interval was
+**2026-11-17 11:40:30.113–11:41:30.557 CET (60.444 seconds)**. The live observer
+and its adb logcat child were verified running across the interval. There were
+**zero SCAN_START events and zero GATT attempts**; the exact main BLE service
+was absent afterwards. Native state remained stopped/owner=none, binding revision
+26 stayed disabled, and the UI retained enabled Verbinden with no open dialog.
+No connect button was pressed during that observation.
+
+The user confirmed other powered BLE devices were nearby. The captured search
+used the Lüftlotse service-UUID filter; the checked UI exposed no generic device
+list or chooser and recovered only the saved deviceId. This confirms the observed
+UI behavior under that reported condition, not a measured count of rejected
+foreign advertisement packets. No phone settings, SQLite implementation or CO2
+alert code were changed for the experiment; app data was not cleared. Temporary
+observers, screenshots/APKs and raw logs are excluded from repository changes.
+
+## Legacy explicit-address reconnection
 
 `ServiceReconnect` is created by an explicit service start and is armed only
 after that run completes the normal Info/CCCD/STATUS handshake and confirms the
@@ -128,14 +376,14 @@ the app references the existing `ble-gatt-transport` Gradle project.
 
 | Android version | Service requirements |
 | --- | --- |
-| API 24–30 | Manifest BLUETOOTH / BLUETOOTH_ADMIN (maxSdk 30); no service scan/location request |
+| API 24–30 | Manifest BLUETOOTH / BLUETOOTH_ADMIN; granted fine location for native scans |
 | API 28+ | Manifest FOREGROUND_SERVICE |
-| API 31+ | Granted runtime BLUETOOTH_CONNECT |
+| API 31+ | Granted runtime BLUETOOTH_CONNECT and BLUETOOTH_SCAN for discovery |
 | API 33+ | POST_NOTIFICATIONS is optional for BLE/storage; required only for visible CO2 alerts |
 | API 34+ | Manifest FOREGROUND_SERVICE_CONNECTED_DEVICE plus BLUETOOTH_CONNECT prerequisite |
 
-The existing UI's scan/location permissions are preserved. The service connects
-to an explicit address and does not scan or pair. Bluetooth/foreground-service
+The service connects to a saved/discovered address, scans only for the service
+UUID and does not pair. Bluetooth/scan/foreground-service
 grants are checked before reserving a run and again inside the service,
 before creating the transport. Missing permission means no GATT is opened.
 
@@ -171,6 +419,8 @@ IO; first client attachment migrates/reads and polls, but never connects.
 | --- | --- |
 | `requestPermissions()` | Visible Activity only; requests CONNECT on API 31+ and POST_NOTIFICATIONS on API 33+. Resolves state and never starts a service. |
 | `startSaved({ revision })` | Visible-app startup only. Atomically rechecks current binding revision, enabled intent, permissions and idle ownership on the native command queue. Stale/disabled/forgotten/active requests are no-ops. Uses saved MAC/UUID and the normal handshake. No permission prompt. |
+| `startDiscovery({revision, manual})` | Current Android route. Visible app + scan/connection grants required. A new app opening enables intent; polling does not. Internal manual calls may enable it too. An active service is never duplicated. |
+| `chooseSensor({runId, address})` | Selects one advertised Lüftlotse candidate only from the current unbound choice list. The normal handshake still verifies compatibility. |
 | `start({ bleAddress, expectedDeviceId? })` | Requires completed binding migration. Explicit MAC address; the persisted UUID is enforced, plus any explicit expectation. Returns starting state with runId; poll getState. New identity/address and enabled intent are saved only after STATUS. |
 | `getState()` | Returns a snapshot; no start, new GATT, subscription or persistence. |
 | `getLiveHistory({fromMs, toMs, sort?, pageSize, deviceId?, cursor?})` | Reads native SQLite on an independent worker, without a BLE run, permissions or binding migration. Calendar bounds are decimal millisecond strings, `[fromMs, toMs)`. Sort: `time-desc` (default), `time-asc`, `ppm-desc`, `ppm-asc`; pageSize 1–50. Returns `{items, nextCursor}`. |

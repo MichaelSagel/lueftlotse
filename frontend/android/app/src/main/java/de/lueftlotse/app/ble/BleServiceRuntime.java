@@ -107,6 +107,34 @@ public final class BleServiceRuntime {
             start(context, visible, saved.bleAddress, saved.deviceId);
         }
     }
+    static boolean discoveryPermitted(Context context) {
+        return permitted(context) && DiscoveryPermissions.granted(Build.VERSION.SDK_INT,
+            grant(context, "android.permission.BLUETOOTH_SCAN"),
+            grant(context, Manifest.permission.ACCESS_FINE_LOCATION),
+            grant(context, "android.permission.ACCESS_BACKGROUND_LOCATION"));
+    }
+    static void startDiscovery(Context context, boolean visible, String revision, boolean manual) throws IOException {
+        onMain();
+        if (STATE.active()) return;
+        NativeBindingRepository.Snapshot saved = bindings(context).requireMigrated();
+        if (!saved.revision.equals(NativeBindingRepository.revision(revision))) throw new NativeBindingRepository.StaleRevision();
+        if (!visible || !discoveryPermitted(context)) throw new SecurityException("BLE permissions: Suche nur mit Berechtigung aus sichtbarer App");
+        if (manual) saved = bindings(context).enableConnection(saved.revision);
+        if (!saved.connectionEnabled) return;
+        NativeBindingRepository.Binding binding = saved.binding;
+        BleServiceState.Run run = STATE.reserveDiscovery(visible, true,
+            binding == null ? null : binding.bleAddress, binding == null ? null : binding.deviceId, saved.revision);
+        createChannel(context);
+        Intent intent = new Intent(context, SensorBleService.class).setAction(SensorBleService.START).putExtra("runId", run.id);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
+            else context.startService(intent);
+        } catch (RuntimeException error) {
+            STATE.failBeforeOpen(run.id, error.toString());
+            throw error;
+        }
+        MAIN.postDelayed(() -> STATE.failBeforeOpen(run.id, "Start des Sensor-Dienstes dauerte zu lange"), 10000);
+    }
     static void disconnect(String id, String reason) {
         onMain(); if (!STATE.stop(id, reason)) return;
         if (host != null) host.disconnectRun(id, reason);

@@ -20,6 +20,8 @@ export class NativeBleSession implements BleSession {
   private readonly document = inject(DOCUMENT);
   readonly state = signal<BleState>('idle');
   readonly reconnecting = signal(false);
+  readonly discoveryMode = signal<'searching' | 'connecting' | 'choice' | null>(null);
+  readonly candidates = signal<{ address: string; name: string }[]>([]);
   readonly phase = signal<BlePhase>('idle');
   readonly info = signal<Info | null>(null);
   readonly status = signal<BleStatus | null>(null);
@@ -51,13 +53,22 @@ export class NativeBleSession implements BleSession {
   private sampleReceived?: bigint;
   private restoreSample = true;
   private opening = false;
+  private restartAfterForget = false;
+  private wasHidden = this.document.hidden;
   private readonly visibility = () => {
     this.readerEpoch++; this.restoreSample = true;
-    if (this.document.hidden) { this.lease?.revoke(); this.preview.next({ kind: 'unavailable' }); }
+    if (this.document.hidden) {
+      this.wasHidden = true;
+      this.lease?.revoke();
+      this.preview.next({ kind: 'unavailable' });
+    }
     else {
       this.refreshPending = true;
       void this.refresh();
-      void this.connectOnOpen();
+      if (this.wasHidden) {
+        this.wasHidden = false;
+        void this.connectOnOpen(false, true);
+      }
     }
   };
   constructor() {
@@ -78,13 +89,20 @@ export class NativeBleSession implements BleSession {
     if (!this.polling) {
       this.readerEpoch++;
       this.restoreSample = true;
-      void this.connectOnOpen();
+      void this.connectOnOpen(false, true);
       void this.refresh();
       this.polling = setInterval(() => { void this.refresh(); }, 1000);
     }
     return {
       id, signal: client.signal,
       connect: address => { owned(); return this.connect(address, client.signal); },
+      connectAutomatically: async () => { owned(); await this.connectOnOpen(true); },
+      selectSensor: async address => {
+        owned();
+        if (!this.run) throw new Error('Native selection unavailable');
+        const state = await this.bridge.chooseSensor({ runId: this.run, address });
+        this.apply(state, performance.now());
+      },
       disconnect: async () => { owned(); await this.disconnect(false); },
       disconnectByUser: async () => { owned(); await this.disconnect(true); },
       forgetDevice: async () => {
@@ -93,6 +111,7 @@ export class NativeBleSession implements BleSession {
           await this.pendingStart?.catch(() => {}); owned();
           // Native tombstone precedes native close. Never pre-revoke an in-flight journal here.
           const saved = await this.bindings.forget(); owned(); this.binding.set(saved.binding); this.bindingError.set(null);
+          this.restartAfterForget = true;
         } catch (error) { this.bindingError.set('BLE binding storage: ' + String(error)); throw error; }
         finally { this.lease?.revoke(); await this.refresh(); }
       },
@@ -119,7 +138,7 @@ export class NativeBleSession implements BleSession {
     }
     return this.migration;
   }
-  private async connectOnOpen(): Promise<void> {
+  private async connectOnOpen(manual = false, onOpen = false): Promise<void> {
     if (this.opening || !this.android || this.document.hidden || this.destroyed || !this.clients.size) {
       return;
     }
@@ -130,16 +149,25 @@ export class NativeBleSession implements BleSession {
     let start: Promise<NativeServiceState> | undefined;
     try {
       const saved = await this.readBinding();
-      if (!current() || !saved.binding?.connectionEnabled || this.connecting) {
+      const enabled = saved.connectionEnabled ?? saved.binding?.connectionEnabled ?? true;
+      if (!current() || (!manual && !onOpen && !enabled) || this.connecting) {
         return;
       }
-      const state = await this.bridge.getState();
+      this.error.set(null);
+      let state = await this.bridge.getState();
       if (!current()) {
         return;
       }
       this.apply(state, performance.now());
-      if (!state.permissionsGranted || state.runId || state.reconnecting ||
-          (state.state !== 'stopped' && state.state !== 'error')) {
+      if (state.reconnecting || (state.state !== 'stopped' && state.state !== 'error')) {
+        return;
+      }
+      if (manual) state = await this.bridge.requestPermissions();
+      if (!current()) return;
+      if (!state.permissionsGranted || state.discoveryPermissionsGranted === false) {
+        if (manual) this.error.set(state.backgroundLocationMissing
+          ? 'BLE background location: Standort immer zulassen'
+          : 'BLE permissions: Bluetooth-Suche muss erlaubt sein.');
         return;
       }
       releaseScan = await this.scanner.holdStopped();
@@ -147,7 +175,7 @@ export class NativeBleSession implements BleSession {
         return;
       }
       // Native command rechecks revision, enabled intent, grants and ownership atomically.
-      start = this.bridge.startSaved({ revision: saved.revision });
+      start = this.bridge.startDiscovery({ revision: saved.revision, manual: manual || onOpen });
       this.pendingStart = start;
       const started = await start;
       if (current()) {
@@ -237,6 +265,10 @@ export class NativeBleSession implements BleSession {
         const changed = this.run !== (state.runId ?? undefined) || this.state() !== this.uiState(state);
         this.apply(state, requested);
         if (changed && this.migrated) await this.readBinding(); // Includes notification Trennen.
+        if (this.restartAfterForget && (state.state === 'stopped' || state.state === 'error')) {
+          this.restartAfterForget = false;
+          void this.connectOnOpen();
+        }
       }
     } catch (error) {
       if (!this.destroyed && command === this.command && epoch === this.readerEpoch) {
@@ -256,6 +288,8 @@ export class NativeBleSession implements BleSession {
       this.connectionKey = connectionKey;
     }
     this.reconnecting.set(value.reconnecting === true);
+    this.discoveryMode.set(value.discoveryMode ?? null);
+    this.candidates.set(value.candidates ?? []);
     const state = this.uiState(value), wasReady = this.state() === 'ready';
     this.state.set(state); this.phase.set(state === 'connecting' ? 'status' : state);
     this.nativeBindingError = value.bindingError;

@@ -20,7 +20,10 @@ WebView/backend involvement; denied notifications do not block BLE/SQLite.
 
 Browser and Android now share the simplified single-column UI at every screen
 width (maximum 440 CSS pixels, centered). The only permanent connection action
-is **Sensor auswählen** / **Trennen**. There is no Sensor badge, local-history
+is **Sensor auswählen** / **Trennen** in browsers. Android has no connection-control buttons or BLE-device list. A downward pull
+from the top resumes connection when idle and retains an active/searching run;
+Trennen remains in the unchanged Android service notification. Its CO2 card displays **Sensor wird gesucht …** during search.
+There is no Sensor badge, local-history
 chart/disclosure, manual synchronization block, journal-download button or extra
 threshold footer. Existing local storage, journal and HTTP synchronization
 implementations remain available internally and are not rewritten by this UI change.
@@ -37,10 +40,13 @@ closed, the app is backgrounded or the screen is locked. Returning to the UI
 restores the last valid sample with its original age and remaining 15-second
 lifetime; stale data remains unavailable. Android retries an unexpected drop of
 a confirmed saved sensor within the live service, with delays capped at 30 seconds.
-Opening the visible Android app also connects to the saved sensor if connection
-intent is enabled, existing permissions are granted and no service run is active.
-No selection or permission dialog opens automatically. Trennen/forget disable
-this behavior as well as retries. Process death, force-stop and OEM power management
+Opening the visible Android app enables automatic connection to the saved sensor
+when permissions are granted and no service run is active. Android first tries
+the saved address, then native service-UUID-filtered scan windows with pauses.
+Every handshake verifies the saved deviceId. Trennen stops connection and search
+until the app is opened again or a downward pull resumes it; state polling cannot restart them. No generic
+picker or device list is shown.
+Process death, force-stop and OEM power management
 can still end the service; no process/boot auto-start is added. Browser reconnection
 behavior is unchanged; a foreground service is not an unlimited-execution guarantee.
 
@@ -161,12 +167,12 @@ After a successful STATUS handshake (including completion of its Control write),
 the app remembers one sensor: the UUID from Info, the BLE address supplied by the
 Android adapter, and `connectionEnabled: true`. This flag records connection intent
 for retries within an already running service; it never starts a service after
-process death or phone boot. The saved sensor can be selected explicitly with
-**Sensor auswählen**.
+process death or phone boot without opening the app. A new visible app opening
+reenables automatic connection; the Android UI has no selection/forget action.
 
 Every later connection must match the saved Info UUID. A mismatch closes the
-attempt without replacing the binding; choose **Gerät vergessen** before selecting
-a different sensor. The same UUID at a new address updates that address only after
+attempt without replacing the binding. The native forget bridge is retained
+internally; the Android screen does not offer device replacement. The same UUID at a new address updates that address only after
 another successful handshake. **Trennen** persists disabled intent before closing
 the session, even when already disconnected or no run survived process restart.
 On persistence failure an existing session still closes and reports the error.
@@ -175,7 +181,7 @@ UI disposal revoke only journal clients. Radio loss without an explicit stop can
 retry the same saved sensor after confirmed cleanup; unsafe journal cancellation
 explicitly ends the run and does not retry.
 
-**Gerät vergessen** closes the session and removes the binding. It leaves history,
+The internal **Gerät vergessen** bridge closes the session and removes the binding. It leaves history,
 journal cursors and pending backend synchronization intact. Forgetting and changing
 devices are disabled during a manual journal download; cancel the download first.
 Storage errors are shown explicitly; a failed write is not reported as a saved

@@ -89,6 +89,8 @@ export interface BleSessionClient {
   readonly id: string;
   readonly signal: AbortSignal;
   connect(address: string): Promise<BleStatus>;
+  connectAutomatically?(): Promise<void>;
+  selectSensor?(address: string): Promise<void>;
   disconnect(): Promise<void>;
   disconnectByUser(): Promise<void>;
   forgetDevice(): Promise<void>;
@@ -100,6 +102,8 @@ export interface BleSession {
   readonly state: Signal<BleState>;
   /** Native service retry cycle; absent in browser sessions. */
   readonly reconnecting?: Signal<boolean>;
+  readonly discoveryMode?: Signal<'searching' | 'connecting' | 'choice' | null>;
+  readonly candidates?: Signal<{ address: string; name: string }[]>;
   readonly phase: Signal<BlePhase>;
   readonly info: Signal<Info | null>;
   readonly status: Signal<BleStatus | null>;

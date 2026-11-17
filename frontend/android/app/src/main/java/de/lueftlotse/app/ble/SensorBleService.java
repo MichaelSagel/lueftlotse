@@ -22,6 +22,7 @@ public final class SensorBleService extends Service {
     private boolean destroyed;
     private ServiceJournal journal;
     private ServiceReconnect reconnect;
+    private ServiceDiscovery discovery;
     private final Runnable journalTick = new Runnable() {
         public void run() {
             if (destroyed || journal == null) return;
@@ -79,6 +80,10 @@ public final class SensorBleService extends Service {
             else startForeground(NOTIFICATION_ID, notification);
             if (!BleServiceRuntime.STATE.open(token, BleServiceRuntime.permitted(this))) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id); return START_NOT_STICKY; }
             BleServiceRuntime.host = this;
+            if (run.discovery) {
+                startDiscovery(token, run);
+                return START_NOT_STICKY;
+            }
             reconnect = new ServiceReconnect(new ServiceReconnect.Port() {
                 public ServiceReconnect.Timer schedule(Runnable action, long delayMs) {
                     android.util.Log.i("SensorBleService", "Reconnect in " + delayMs + " ms");
@@ -127,8 +132,15 @@ public final class SensorBleService extends Service {
                 public void event(GattTransport.Connection c, ProtocolSession.Event event) {
                     if (event.kind == ProtocolSession.Kind.READY) c.ready().thenAccept(info -> BleServiceRuntime.MAIN.post(() -> {
                         if (!currentConnection(token, c)) return;
+                        if (discovery != null && !info.supportsLiveSample()) {
+                            discovery.rejectCurrent();
+                            c.cancel();
+                            return;
+                        }
                         if (!BleServiceRuntime.bindingActions(SensorBleService.this).ready(token, info)) return;
-                        reconnect.ready(new NativeBindingRepository.Binding(info.deviceId, address, true));
+                        NativeBindingRepository.Binding confirmed = new NativeBindingRepository.Binding(info.deviceId, address, true);
+                        if (discovery != null) discovery.ready(confirmed);
+                        else reconnect.ready(confirmed);
                         BleServiceRuntime.STATE.protocolStatus(token, event.message);
                         openJournal(token, event.generation, c);
                         if (!destroyed && c.state() == GattTransport.State.READY) {
@@ -187,12 +199,68 @@ public final class SensorBleService extends Service {
     private boolean currentConnection(String token, GattTransport.Connection candidate) {
         return candidate == connection && BleServiceRuntime.STATE.matchesConnection(token, candidate.id);
     }
+    void chooseSensor(String address) {
+        if (discovery == null) throw new IllegalStateException("Keine Sensor-Auswahl aktiv");
+        discovery.choose(address);
+    }
+    private void startDiscovery(String token, BleServiceState.Run run) {
+        NativeSensorScanner scanner = new NativeSensorScanner(this);
+        NativeBindingRepository.Binding saved = run.expectedDeviceId == null ? null
+            : new NativeBindingRepository.Binding(run.expectedDeviceId, run.address, true);
+        discovery = new ServiceDiscovery(new ServiceDiscovery.Port() {
+            public ServiceDiscovery.Timer schedule(Runnable action, long delay) {
+                android.util.Log.i("SensorDiscovery", "RETRY_WAIT ms=" + delay);
+                BleServiceRuntime.MAIN.postDelayed(action, delay);
+                return () -> BleServiceRuntime.MAIN.removeCallbacks(action);
+            }
+            public void scan(java.util.function.Consumer<ServiceDiscovery.Candidate> found, java.util.function.Consumer<String> failed) {
+                scanner.start(found, failed);
+            }
+            public void stopScan() { scanner.stop(); }
+            public boolean enabled() {
+                if (destroyed || BleServiceRuntime.STATE.stopping(token) || !BleServiceRuntime.discoveryPermitted(SensorBleService.this)) return false;
+                try {
+                    NativeBindingRepository.Snapshot value = BleServiceRuntime.bindings(SensorBleService.this).requireMigrated();
+                    String expected = discovery.expectedDeviceId();
+                    return value.connectionEnabled && (expected == null ? value.binding == null
+                        : value.binding != null && expected.equals(value.binding.deviceId));
+                } catch (Exception error) {
+                    android.util.Log.e("SensorDiscovery", "Binding unreadable", error);
+                    return false;
+                }
+            }
+            public void connect(String address, String expected) {
+                run.address = address;
+                connectAttempt(token, address, expected);
+            }
+            public void state(String mode, java.util.List<ServiceDiscovery.Candidate> values) {
+                if (mode != null) BleServiceRuntime.STATE.reconnecting(token, "Sensor wird gesucht …");
+                java.util.List<java.util.Map<String, Object>> candidates = new java.util.ArrayList<>();
+                for (ServiceDiscovery.Candidate candidate : values) candidates.add(candidate.toBridge());
+                BleServiceRuntime.STATE.discovery(token, mode, candidates);
+                if (mode != null) updateServiceNotification("Sensor wird gesucht …");
+            }
+            public void terminal(String reason) {
+                BleServiceRuntime.STATE.bindingError(reason);
+                BleServiceRuntime.disconnect(token, reason);
+            }
+        }, saved);
+        discovery.start();
+    }
     void disconnectRun(String token, String reason) {
         BleServiceRuntime.onMain();
         if (token == null || !token.equals(runId)) {
             return;
         }
         BleServiceRuntime.co2Alerts(SensorBleService.this).interrupted();
+        if (discovery != null) {
+            try { discovery.cancel(); }
+            catch (RuntimeException error) {
+                BleServiceRuntime.STATE.closed(token, false, "Scan cleanup uncertain: " + error);
+                finishService(token);
+                return;
+            }
+        }
         if (reconnect != null) {
             reconnect.cancel();
         }
@@ -229,6 +297,15 @@ public final class SensorBleService extends Service {
     private void afterClose(String token, boolean clean, boolean identityRejected, String reason) {
         BleServiceRuntime.co2Alerts(SensorBleService.this).interrupted();
         android.util.Log.i("SensorBleService", "BLE closed: " + reason);
+        if (discovery != null && !destroyed && !BleServiceRuntime.STATE.stopping(token)) {
+            if (clean) discovery.closed(true, identityRejected);
+            else {
+                discovery.cancel();
+                BleServiceRuntime.STATE.closed(token, false, reason);
+                finishService(token);
+            }
+            return;
+        }
         if (!destroyed && !BleServiceRuntime.STATE.stopping(token) && reconnect != null
                 && reconnect.unexpectedClose(clean, identityRejected)) {
             BleServiceRuntime.STATE.reconnecting(token, reason);

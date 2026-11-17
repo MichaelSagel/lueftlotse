@@ -58,6 +58,8 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     bridge = {
       getState: vi.fn(async () => snapshot), start: vi.fn(async () => snapshot),
       startSaved: vi.fn(async () => snapshot),
+      startDiscovery: vi.fn(async () => snapshot),
+      chooseSensor: vi.fn(async () => snapshot),
       requestPermissions: vi.fn(async () => snapshot),
       disconnect: vi.fn(async () => snapshot = { ...snapshot, state: 'stopped' }), closeSession: vi.fn(async () => snapshot = { ...snapshot, state: 'stopped' }),
       getBinding: vi.fn(async () => ({ migrationComplete, revision: migrationComplete ? '1' : '0', binding: null })),
@@ -126,9 +128,54 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     const session = configure();
     session.attachClient();
     session.attachClient();
-    await vi.waitFor(() => expect(bridge.startSaved).toHaveBeenCalledExactlyOnceWith({ revision: '7' }));
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledExactlyOnceWith({ revision: '7', manual: true }));
     expect(bridge.start).not.toHaveBeenCalled();
     expect(bridge.requestPermissions).not.toHaveBeenCalled();
+  });
+  it('starts on first visibility when the WebView was created behind the lock screen', async () => {
+    savedForOpening(false);
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    const session = configure();
+    session.attachClient();
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledExactlyOnceWith({ revision: '7', manual: true }));
+  });
+  it('starts native filtered discovery automatically with no binding', async () => {
+    snapshot = { ...snapshot, state: 'stopped', runId: null };
+    const session = configure();
+    session.attachClient();
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledExactlyOnceWith({ revision: '1', manual: true }));
+    expect(bridge.requestPermissions).not.toHaveBeenCalled();
+  });
+  it('reenables the saved sensor once on a new opening after Trennen', async () => {
+    savedForOpening(false);
+    const session = configure();
+    session.attachClient();
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledExactlyOnceWith({ revision: '7', manual: true }));
+    expect(bridge.requestPermissions).not.toHaveBeenCalled();
+  });
+  it('passes selection only to the current native discovery run', async () => {
+    snapshot = { ...snapshot, state: 'connecting', discoveryMode: 'choice', candidates: [
+      { address: 'A', name: 'Lüftlotse A' }, { address: 'B', name: 'Lüftlotse B' },
+    ] };
+    const session = configure();
+    const client = session.attachClient();
+    await vi.waitFor(() => expect(session.discoveryMode()).toBe('choice'));
+    await client.selectSensor!('A');
+    expect(bridge.chooseSensor).toHaveBeenCalledExactlyOnceWith({ runId: snapshot.runId, address: 'A' });
+    expect(bridge.start).not.toHaveBeenCalled();
+  });
+  it('explains missing legacyBackgroundLocation without starting discovery', async () => {
+    savedForOpening();
+    snapshot = { ...snapshot, discoveryPermissionsGranted: false, backgroundLocationMissing: true };
+    const session = configure();
+    const client = session.attachClient();
+    await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
+    await client.connectAutomatically!();
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
+    expect(session.error()).toContain('BLE background location');
   });
   it.each(['starting', 'connecting', 'ready'] as const)('does not duplicate a %s service on opening', async state => {
     savedForOpening();
@@ -137,7 +184,7 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     session.attachClient();
     await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
     await vi.waitFor(() => expect(bridge.getState).toHaveBeenCalled());
-    expect(bridge.startSaved).not.toHaveBeenCalled();
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
   });
   it('does not duplicate a service waiting to reconnect', async () => {
     savedForOpening();
@@ -145,7 +192,7 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     const session = configure();
     session.attachClient();
     await vi.waitFor(() => expect(session.reconnecting()).toBe(true));
-    expect(bridge.startSaved).not.toHaveBeenCalled();
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
   });
   it('leaves a manual connection available when automatic startup lacks permissions', async () => {
     savedForOpening();
@@ -153,23 +200,25 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     const session = configure();
     const client = session.attachClient();
     await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
-    expect(bridge.startSaved).not.toHaveBeenCalled();
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
     expect(bridge.requestPermissions).not.toHaveBeenCalled();
     await expect(client.connect('01:23:45:67:89:AB')).rejects.toThrow('permissions');
     expect(bridge.requestPermissions).toHaveBeenCalledOnce();
   });
-  it('does not start a disabled or forgotten sensor when the app is reopened', async () => {
-    savedForOpening(false);
+  it('does not restart after Trennen during polling but resumes on reopening', async () => {
+    savedForOpening();
     const session = configure();
-    session.attachClient();
-    await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
+    const client = session.attachClient();
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledOnce());
+    await client.disconnectByUser();
+    vi.mocked(bridge.startDiscovery).mockClear();
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
     document.dispatchEvent(new Event('visibilitychange'));
-    await vi.waitFor(() => expect(bridge.getBinding).toHaveBeenCalledTimes(4));
-    expect(bridge.startSaved).not.toHaveBeenCalled();
-    vi.mocked(bridge.getBinding).mockResolvedValue({ migrationComplete: true, revision: '8', binding: null });
+    hidden.mockReturnValue(false);
     document.dispatchEvent(new Event('visibilitychange'));
-    await vi.waitFor(() => expect(session.binding()).toBeNull());
-    expect(bridge.startSaved).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledOnce());
   });
   it('cancels an opening request if Trennen happens while the binding is loading', async () => {
     savedForOpening();
@@ -180,7 +229,7 @@ describe('native manual journal bridge and Android BLE_SESSION', () => {
     const disconnected = client.disconnectByUser();
     loading.resolve({ migrationComplete: true, revision: '8', binding: null });
     await disconnected;
-    expect(bridge.startSaved).not.toHaveBeenCalled();
+    expect(bridge.startDiscovery).not.toHaveBeenCalled();
   });
   it('runs the unchanged BatchReceiver atomic commit before ACK and awaits ACK_ACCEPTED before the next FETCH', async () => {
     const link = lease(), p = await packet(link); const ack = ackFor(p);

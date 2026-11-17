@@ -8,7 +8,9 @@ import java.util.*;
 public final class BleServiceState {
     public enum Phase { STOPPED, STARTING, CONNECTING, READY, STOPPING, ERROR }
     public static final class Run {
-        public final String id = UUID.randomUUID().toString(), address, expectedDeviceId;
+        public final String id = UUID.randomUUID().toString(), expectedDeviceId;
+        public String address;
+        public boolean discovery;
         public BigInteger bindingRevision;
         private final BleOwnership.Lease lease;
         private boolean opened, stopping, closed;
@@ -28,23 +30,39 @@ public final class BleServiceState {
     private String liveStorageError;
     private String connectionId;
     private boolean reconnecting;
+    private String discoveryMode;
+    private List<Map<String, Object>> candidates = Collections.emptyList();
     private long receivedAt;
     public BleServiceState(BleOwnership ownership) { this.ownership = ownership; }
     public synchronized Run reserve(boolean visible, boolean permitted, String address, String expected) {
         return reserve(visible, permitted, address, expected, null);
     }
     public synchronized Run reserve(boolean visible, boolean permitted, String address, String expected, BigInteger revision) {
+        return reserve(visible, permitted, address, expected, revision, false);
+    }
+    public synchronized Run reserveDiscovery(boolean visible, boolean permitted, String address, String expected, BigInteger revision) {
+        return reserve(visible, permitted, address, expected, revision, true);
+    }
+    private Run reserve(boolean visible, boolean permitted, String address, String expected, BigInteger revision, boolean discovery) {
         if (!visible) throw new IllegalStateException("Start nur aus einer sichtbaren Activity");
         if (!permitted) throw new IllegalStateException("Bluetooth- und Benachrichtigungsberechtigungen fehlen");
         if (active()) throw new IllegalStateException("Sensor-Dienst ist bereits aktiv");
-        if (address == null || !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) throw new IllegalArgumentException("Ungültige BLE-Adresse");
+        if ((address == null && !discovery) || (address != null && !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}"))) throw new IllegalArgumentException("Ungültige BLE-Adresse");
         String expectedId = expected == null ? null : Codec.uuid(expected);
         run = new Run(address, expectedId, ownership.acquire(BleOwnership.Owner.SERVICE), revision);
+        run.discovery = discovery;
+        discoveryMode = null;
+        candidates = Collections.emptyList();
         connectionId = null;
         reconnecting = false;
         phase = Phase.STARTING; info = null; status = null; sample = null; sampleValid = false; reason = null; bindingError = null; return run;
     }
     public synchronized boolean active() { return run != null && ownership.owns(run.lease); }
+    public synchronized void discovery(String id, String mode, List<Map<String, Object>> values) {
+        if (!matches(id) || run.stopping) return;
+        discoveryMode = mode;
+        candidates = Collections.unmodifiableList(new ArrayList<>(values));
+    }
     public synchronized Run current() { return run; }
     public synchronized boolean matches(String id) { return active() && run.id.equals(id); }
     public synchronized boolean canBecomeReady(String id) { return matches(id) && !run.stopping && phase == Phase.CONNECTING; }
@@ -109,6 +127,8 @@ public final class BleServiceState {
     public synchronized boolean stop(String id, String why) {
         if (!matches(id) || run.stopping) return false;
         run.stopping = true; reason = why;
+        discoveryMode = null;
+        candidates = Collections.emptyList();
         reconnecting = false;
         if (!run.opened) { ownership.release(run.lease); phase = Phase.STOPPED; }
         else phase = Phase.STOPPING;
@@ -117,6 +137,8 @@ public final class BleServiceState {
     public synchronized void ready(String id, Codec.Info value) {
         if (!matches(id) || run.stopping || phase != Phase.CONNECTING) return; info = value; phase = Phase.READY;
         reconnecting = false;
+        discoveryMode = null;
+        candidates = Collections.emptyList();
     }
     public synchronized void live(String id, Codec.Message value, long arrival) {
         if (!matches(id) || run.stopping || phase != Phase.READY || value.type != 0x8a || arrival < 0) return;
@@ -134,6 +156,8 @@ public final class BleServiceState {
     public synchronized void closed(String id, boolean clean, String why) {
         if (!matches(id) || run.closed) return;
         run.closed = true;
+        discoveryMode = null;
+        candidates = Collections.emptyList();
         reconnecting = false;
         if (clean) ownership.release(run.lease);
         phase = clean ? Phase.STOPPED : Phase.ERROR; reason = why; run.stopping = true;
@@ -149,6 +173,8 @@ public final class BleServiceState {
         result.put("liveStorageError", liveStorageError);
         result.put("connectionId", connectionId);
         result.put("reconnecting", reconnecting);
+        result.put("discoveryMode", discoveryMode);
+        result.put("candidates", candidates);
         result.put("lastSample", sample); result.put("nowElapsedMs", Long.toString(now));
         result.put("sampleAvailable", phase == Phase.READY && sampleValid && sample != null && now >= receivedAt && now - receivedAt < 15000);
         return Collections.unmodifiableMap(result);

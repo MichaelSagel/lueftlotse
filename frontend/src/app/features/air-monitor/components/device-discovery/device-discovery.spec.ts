@@ -12,7 +12,89 @@ import { testStorage } from '../../data-access/co2-storage.testing';
 import { routes } from '../../../../app.routes';
 
 const flush = async () => { for(let i=0;i<16;i++) await Promise.resolve(); };
-describe.each([false,true])('shared connection UI, native scanner=%s', native => {
+describe('native automatic sensor UI', () => {
+  let connection: ReturnType<typeof createSession>;
+  const scanner = { available: true, busy: signal(false), start: vi.fn(), stop: vi.fn() };
+  function createSession() {
+    return {
+      state: signal('idle'), phase: signal('idle'), reconnecting: signal(false),
+      discoveryMode: signal<'searching' | 'connecting' | 'choice' | null>(null),
+      candidates: signal<{ address: string; name: string }[]>([]),
+      bindingLoading: signal(false), binding: signal<object | null>(null),
+      bindingError: signal<string | null>(null), error: signal<string | null>(null),
+      attachClient: vi.fn(), revoke: vi.fn(), connect: vi.fn(),
+      connectAutomatically: vi.fn(async () => {
+        connection.state.set('connecting');
+        connection.discoveryMode.set('searching');
+      }),
+      selectSensor: vi.fn(async (_address: string) => {
+        connection.discoveryMode.set('connecting');
+      }),
+      disconnectByUser: vi.fn(async () => {
+        connection.state.set('idle');
+        connection.discoveryMode.set(null);
+      }),
+      forgetDevice: vi.fn(async () => { connection.binding.set(null); }),
+    };
+  }
+  beforeEach(() => {
+    connection = createSession();
+    connection.attachClient.mockReturnValue(connection);
+    scanner.start.mockClear();
+    TestBed.configureTestingModule({ providers: [
+      { provide: BLE_SESSION, useValue: connection },
+      { provide: BleScanner, useValue: scanner },
+      { provide: WebBluetoothAdapter, useValue: null },
+    ] });
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+      configurable: true, value: function(this: HTMLDialogElement) { this.open = true; },
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+      configurable: true, value: function(this: HTMLDialogElement) { this.open = false; },
+    });
+  });
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+    Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
+  });
+  function render() {
+    const fixture = TestBed.createComponent(DeviceDiscovery);
+    fixture.detectChanges();
+    return { fixture, element: fixture.nativeElement as HTMLElement };
+  }
+  it.each(['idle', 'connecting', 'ready', 'closing', 'error'])('has no Android connection controls in state %s', state => {
+    connection.state.set(state);
+    const { element } = render();
+    expect(element.querySelector('button, dialog, li')).toBeNull();
+    expect(connection.disconnectByUser).not.toHaveBeenCalled();
+    expect(connection.connectAutomatically).not.toHaveBeenCalled();
+  });
+  it('has no controls while native discovery or reconnect is active', () => {
+    connection.state.set('connecting');
+    connection.discoveryMode.set('searching');
+    connection.reconnecting.set(true);
+    const { element } = render();
+    expect(element.querySelector('button, dialog, li')).toBeNull();
+    expect(scanner.start).not.toHaveBeenCalled();
+  });
+  it('never exposes a native device list or forget action', () => {
+    connection.binding.set({ deviceId: 'saved' });
+    connection.discoveryMode.set('choice');
+    connection.candidates.set([{ address: 'A', name: 'A' }, { address: 'B', name: 'B' }]);
+    const { element } = render();
+    expect(element.querySelector('dialog, ul, .forget, .connect')).toBeNull();
+    expect(connection.selectSensor).not.toHaveBeenCalled();
+    expect(connection.forgetDevice).not.toHaveBeenCalled();
+  });
+  it('explains legacyBackgroundLocation using the Android settings instruction', () => {
+    connection.error.set('BLE background location: Standort immer zulassen');
+    const { element } = render();
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain('Immer zulassen');
+  });
+
+});
+describe.each([false])('shared connection UI, native scanner=%s', native => {
   const saved = {version:1,deviceId:'00112233-4455-4677-8899-aabbccddeeff',bleAddress:'address',connectionEnabled:true};
   let connection: ReturnType<typeof session>;
   let scanner: {available:boolean;busy:ReturnType<typeof signal<boolean>>;devices:ReturnType<typeof signal<{id:string;name:string}[]>>;start:ReturnType<typeof vi.fn>;stop:ReturnType<typeof vi.fn>;message:()=>string};
@@ -79,6 +161,15 @@ describe.each([false,true])('shared connection UI, native scanner=%s', native =>
   it('preserves errors and does not show ordinary ready messages',async()=>{
     const {fixture,el}=render();connection.state.set('ready');connection.phase.set('ready');connection.error.set('BLE cleanup failed');fixture.detectChanges();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain('sicher beendet');expect(el.textContent).not.toContain('Verbindung bereit.');fixture.destroy();
+  });
+  it('preserves browser button locking while a binding read is pending', () => {
+    connection.state.set('ready');
+    connection.phase.set('ready');
+    connection.bindingLoading.set(true);
+    const { fixture, button } = render();
+    expect(button.textContent?.trim()).toBe('Trennen');
+    expect(button.disabled).toBe(true);
+    fixture.destroy();
   });
   if(native){
     it('cancels the selector safely and forgets a saved binding only explicitly',async()=>{

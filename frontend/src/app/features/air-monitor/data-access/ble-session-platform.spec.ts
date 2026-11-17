@@ -12,15 +12,20 @@ import { Co2Monitor } from './co2-monitor';
 import { BleJournalSync } from './ble-journal-sync';
 import { DeviceDiscovery } from '../components/device-discovery/device-discovery';
 import { NativeBleBinding } from './native-ble-binding';
+import { BleScanner } from './ble-scanner';
 import { Co2History } from './co2-history';
 import { Co2Storage } from './co2-storage';
 
 describe('production BLE_SESSION selection', () => {
-  const bridge = { getState: vi.fn(), getBinding: vi.fn(), migrateBinding: vi.fn(), start: vi.fn(), requestPermissions: vi.fn() };
+  const bridge = {
+    getState: vi.fn(), getBinding: vi.fn(), migrateBinding: vi.fn(), start: vi.fn(),
+    startDiscovery: vi.fn(), chooseSensor: vi.fn(), requestPermissions: vi.fn(),
+  };
   beforeEach(() => {
     vi.stubGlobal('indexedDB', new IDBFactory()); vi.stubGlobal('IDBKeyRange', IDBKeyRange); vi.resetAllMocks();
     bridge.getBinding.mockResolvedValue({ migrationComplete: true, revision: '1', binding: null });
     bridge.getState.mockResolvedValue({ state: 'stopped', runId: null, info: null, status: null, lastSample: null, sampleAvailable: false, nowElapsedMs: '0', reason: null, bindingError: null, permissionsGranted: true });
+    bridge.startDiscovery.mockImplementation(() => bridge.getState());
     TestBed.configureTestingModule({ providers: [...routes[0].providers!, { provide: BLE_SERVICE_SESSION_BRIDGE, useValue: bridge }] });
   });
   afterEach(async () => {
@@ -38,6 +43,15 @@ describe('production BLE_SESSION selection', () => {
     expect(monitor.connection).toBe(session); expect(journal.connection).toBe(session); expect(fixture.debugElement.injector.get(BLE_SESSION)).toBe(session);
     await vi.waitFor(() => expect(session.bindingLoading()).toBe(false));
     expect(bridge.start).not.toHaveBeenCalled(); expect(legacyConnect).not.toHaveBeenCalled(); fixture.destroy();
+  });
+  it('routeDiscovery starts one native search for multiple attached Android readers', async () => {
+    vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
+    TestBed.overrideProvider(BleScanner, { useValue: { holdStopped: vi.fn(async () => () => {}) } });
+    const session = TestBed.inject(BLE_SESSION);
+    session.attachClient();
+    session.attachClient();
+    await vi.waitFor(() => expect(bridge.startDiscovery).toHaveBeenCalledExactlyOnceWith({ revision: '1', manual: true }));
+    expect(bridge.start).not.toHaveBeenCalled();
   });
   it('uses a browser session with no native calls, even for explicit actions or a binding coordinator', async () => {
     vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('web');

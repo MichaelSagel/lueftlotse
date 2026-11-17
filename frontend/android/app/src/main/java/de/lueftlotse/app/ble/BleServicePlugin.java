@@ -13,6 +13,9 @@ import java.util.concurrent.CompletionStage;
 /** Local bridge. The Android UI coordinates migration and visible-app startup. */
 @CapacitorPlugin(name = "BleService", permissions = {
     @Permission(alias = "bleConnect", strings = {"android.permission.BLUETOOTH_CONNECT"}),
+    @Permission(alias = "bleScan", strings = {"android.permission.BLUETOOTH_SCAN"}),
+    @Permission(alias = "legacyScan", strings = {"android.permission.ACCESS_FINE_LOCATION"}),
+    @Permission(alias = "legacyBackground", strings = {"android.permission.ACCESS_BACKGROUND_LOCATION"}),
     @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"})
 })
 public final class BleServicePlugin extends Plugin {
@@ -21,7 +24,11 @@ public final class BleServicePlugin extends Plugin {
     private void resolveState(PluginCall call) {
         try {
             JSObject result = JSObject.fromJSONObject(new JSONObject(BleServiceRuntime.snapshot()));
-            result.put("permissionsGranted", BleServiceRuntime.permitted(getContext())); call.resolve(result);
+            result.put("permissionsGranted", BleServiceRuntime.permitted(getContext()));
+            result.put("discoveryPermissionsGranted", BleServiceRuntime.discoveryPermitted(getContext()));
+            result.put("backgroundLocationMissing", Build.VERSION.SDK_INT >= 29 && Build.VERSION.SDK_INT <= 30
+                && getPermissionState("legacyBackground") != PermissionState.GRANTED);
+            call.resolve(result);
         } catch (Exception error) { call.reject("Dienststatus nicht verfügbar", error); }
     }
     @PluginMethod public void start(PluginCall call) {
@@ -36,6 +43,30 @@ public final class BleServicePlugin extends Plugin {
         BleServiceRuntime.MAIN.post(() -> {
             try {
                 BleServiceRuntime.startSaved(getContext().getApplicationContext(), visible(), call.getString("revision"));
+                resolveState(call);
+            } catch (Exception error) {
+                call.reject(error.getMessage(), error);
+            }
+        });
+    }
+    @PluginMethod public void startDiscovery(PluginCall call) {
+        BleServiceRuntime.MAIN.post(() -> {
+            try {
+                BleServiceRuntime.startDiscovery(getContext().getApplicationContext(), visible(),
+                    call.getString("revision"), Boolean.TRUE.equals(call.getBoolean("manual", false)));
+                resolveState(call);
+            } catch (Exception error) {
+                call.reject(error.getMessage(), error);
+            }
+        });
+    }
+    @PluginMethod public void chooseSensor(PluginCall call) {
+        BleServiceRuntime.MAIN.post(() -> {
+            try {
+                if (!visible() || !BleServiceRuntime.STATE.matches(call.getString("runId")) || BleServiceRuntime.host == null) {
+                    throw new IllegalStateException("Sensor-Auswahl ist nicht mehr aktuell");
+                }
+                BleServiceRuntime.host.chooseSensor(call.getString("address"));
                 resolveState(call);
             } catch (Exception error) {
                 call.reject(error.getMessage(), error);
@@ -221,6 +252,9 @@ public final class BleServicePlugin extends Plugin {
             if (!visible()) { call.reject("Berechtigungen nur aus sichtbarer Activity anfordern"); return; }
             List<String> aliases = new ArrayList<>();
             if (Build.VERSION.SDK_INT >= 31 && getPermissionState("bleConnect") != PermissionState.GRANTED) aliases.add("bleConnect");
+            if (Build.VERSION.SDK_INT >= 31 && getPermissionState("bleScan") != PermissionState.GRANTED) aliases.add("bleScan");
+            if (Build.VERSION.SDK_INT < 31 && getPermissionState("legacyScan") != PermissionState.GRANTED) aliases.add("legacyScan");
+            if (Build.VERSION.SDK_INT == 29 && getPermissionState("legacyBackground") != PermissionState.GRANTED) aliases.add("legacyBackground");
             if (Build.VERSION.SDK_INT >= 33 && getPermissionState("notifications") != PermissionState.GRANTED) aliases.add("notifications");
             if (aliases.isEmpty()) resolveState(call);
             else requestPermissionForAliases(aliases.toArray(new String[0]), call, "permissionsResult");

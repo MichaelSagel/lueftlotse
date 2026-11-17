@@ -32,12 +32,18 @@ public final class NativeBindingRepository {
         public final boolean migrationComplete;
         public final BigInteger revision;
         public final Binding binding;
+        public final boolean connectionEnabled;
         Snapshot(boolean migrated, BigInteger revision, Binding binding) {
+            this(migrated, revision, binding, binding == null || binding.connectionEnabled);
+        }
+        Snapshot(boolean migrated, BigInteger revision, Binding binding, boolean enabled) {
             migrationComplete = migrated; this.revision = revision; this.binding = binding;
+            connectionEnabled = enabled;
         }
         public Map<String, Object> toBridge() {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("migrationComplete", migrationComplete); result.put("revision", revision.toString());
+            result.put("connectionEnabled", connectionEnabled);
             result.put("binding", binding == null ? null : binding.toBridge()); return Collections.unmodifiableMap(result);
         }
     }
@@ -45,6 +51,7 @@ public final class NativeBindingRepository {
         StaleRevision() { super("Veraltete Bindungsrevision"); }
     }
     private static final int MAGIC = 0x424c4231;
+    private static final int MAGIC_V2 = 0x424c4232;
     static final int MAX_BYTES = 512;
     static final BigInteger MAX_REVISION = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
     private final Storage storage;
@@ -71,13 +78,19 @@ public final class NativeBindingRepository {
     }
     public synchronized Snapshot disableConnection() throws IOException {
         Snapshot old = requireMigrated();
-        if (old.binding == null || !old.binding.connectionEnabled) return old;
-        return save(old, new Binding(old.binding.deviceId, old.binding.bleAddress, false));
+        if (!old.connectionEnabled) return old;
+        return save(old, old.binding == null ? null : new Binding(old.binding.deviceId, old.binding.bleAddress, false), false);
+    }
+    public synchronized Snapshot enableConnection(BigInteger revision) throws IOException {
+        Snapshot old = requireMigrated();
+        checkRevision(old, revision);
+        if (old.connectionEnabled) return old;
+        return save(old, old.binding == null ? null : new Binding(old.binding.deviceId, old.binding.bleAddress, true), true);
     }
     public synchronized Snapshot forget(BigInteger revision) throws IOException {
         Snapshot old = read(); checkRevision(old, revision);
         // Persist the tombstone even if there was never a sensor. Never delete this file.
-        return old.migrationComplete && old.binding == null ? old : save(old, null);
+        return old.migrationComplete && old.binding == null && old.connectionEnabled ? old : save(old, null);
     }
     public static BigInteger revision(String value) {
         if (value == null || !value.matches("0|[1-9][0-9]{0,19}")) throw new IllegalArgumentException("Ungültige Bindungsrevision");
@@ -92,8 +105,11 @@ public final class NativeBindingRepository {
         return a == null ? b == null : b != null && a.deviceId.equals(b.deviceId) && a.bleAddress.equals(b.bleAddress) && a.connectionEnabled == b.connectionEnabled;
     }
     private Snapshot save(Snapshot old, Binding binding) throws IOException {
+        return save(old, binding, binding == null || binding.connectionEnabled);
+    }
+    private Snapshot save(Snapshot old, Binding binding, boolean enabled) throws IOException {
         if (old.revision.equals(MAX_REVISION)) throw new IOException("Bindungsrevision ausgeschöpft");
-        Snapshot next = new Snapshot(true, old.revision.add(BigInteger.ONE), binding);
+        Snapshot next = new Snapshot(true, old.revision.add(BigInteger.ONE), binding, enabled);
         byte[] encoded = encode(next); storage.write(encoded);
         // A success reply is a durable, read-back-confirmed snapshot, never an optimistic cache.
         if (!Arrays.equals(encoded, storage.read())) throw new IOException("Bindung konnte nicht bestätigt werden");
@@ -101,11 +117,12 @@ public final class NativeBindingRepository {
     }
     static byte[] encode(Snapshot value) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
-        out.writeInt(MAGIC); out.writeBoolean(value.migrationComplete); out.writeUTF(value.revision.toString());
+        out.writeInt(MAGIC_V2); out.writeBoolean(value.migrationComplete); out.writeUTF(value.revision.toString());
         out.writeBoolean(value.binding != null);
         if (value.binding != null) {
             out.writeUTF(value.binding.deviceId); out.writeUTF(value.binding.bleAddress); out.writeBoolean(value.binding.connectionEnabled);
         }
+        out.writeBoolean(value.connectionEnabled);
         CRC32 crc = new CRC32(); crc.update(bytes.toByteArray()); out.writeInt((int) crc.getValue()); return bytes.toByteArray();
     }
     static Snapshot decode(byte[] bytes) throws IOException {
@@ -113,12 +130,15 @@ public final class NativeBindingRepository {
         try {
             CRC32 crc = new CRC32(); crc.update(bytes, 0, bytes.length - 4);
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
-            if (in.readInt() != MAGIC || !in.readBoolean()) throw new IOException("Unbekannte Bindungsversion / Migration");
+            int magic = in.readInt();
+            if ((magic != MAGIC && magic != MAGIC_V2) || !in.readBoolean()) throw new IOException("Unbekannte Bindungsversion / Migration");
             BigInteger revision = revision(in.readUTF());
             if (revision.signum() == 0) throw new IOException("Ungültige persistierte Revision");
             Binding binding = in.readBoolean() ? new Binding(in.readUTF(), in.readUTF(), in.readBoolean()) : null;
+            boolean enabled = magic == MAGIC_V2 ? in.readBoolean() : binding == null || binding.connectionEnabled;
+            if (binding != null && binding.connectionEnabled != enabled) throw new IOException("Inconsistent connection intent");
             if (Integer.toUnsignedLong(in.readInt()) != crc.getValue() || in.available() != 0) throw new IOException("Bindungsdatei CRC / Größe ungültig");
-            return new Snapshot(true, revision, binding);
+            return new Snapshot(true, revision, binding, enabled);
         } catch (RuntimeException e) { throw new IOException("Ungültige Bindungsdaten", e); }
     }
 }

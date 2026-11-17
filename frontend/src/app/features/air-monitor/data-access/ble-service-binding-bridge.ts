@@ -6,6 +6,7 @@ export interface NativeBindingState {
   readonly migrationComplete: boolean;
   readonly revision: string;
   readonly binding: BleBinding | null;
+  readonly connectionEnabled?: boolean;
 }
 
 /** Explicit commands only. There is intentionally no general-purpose write/save binding API. */
@@ -26,7 +27,10 @@ export function validatedNativeBinding(value: unknown): NativeBindingState {
       !/^(0|[1-9][0-9]{0,19})$/.test(state.revision) || BigInt(state.revision) > (1n << 64n) - 1n ||
       !Object.hasOwn(state, 'binding') || state.binding === undefined) throw new Error('Invalid native binding state');
   const binding = validatedBleBinding(state.binding);
+  if (state.connectionEnabled !== undefined && (typeof state.connectionEnabled !== 'boolean' ||
+      (binding !== null && binding.connectionEnabled !== state.connectionEnabled))) throw new Error('Invalid native connection intent');
   if (binding && !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(binding.bleAddress)) throw new Error('Invalid native BLE address');
   if (state.migrationComplete ? state.revision === '0' : state.revision !== '0' || binding !== null) throw new Error('Invalid native migration marker');
-  return Object.freeze({ migrationComplete: state.migrationComplete, revision: state.revision, binding });
+  return Object.freeze({ migrationComplete: state.migrationComplete, revision: state.revision, binding,
+    ...(state.connectionEnabled === undefined ? {} : { connectionEnabled: state.connectionEnabled }) });
 }

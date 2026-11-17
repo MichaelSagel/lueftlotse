@@ -6,11 +6,13 @@ migration before every explicit connection. Constructors have no IO. Failure
 blocks connection and is reported in German; another explicit attempt can retry
 the idempotent operation. No fallback transport is used. Browser sessions cannot
 call the native bridge or migrate. Migration itself never starts the BLE service. After it completes, opening the
-visible app may call `startSaved({revision})`: native code rechecks the current
-revision, enabled intent, grants and idle service ownership. Disabled/forgotten
-bindings never start automatically; no permission dialog is opened. Notification
-Trennen uses the same durable disabled intent. No boot/process-start receiver
-is added.
+visible app calls `startDiscovery({revision, manual:true})` to enable connection
+intent for this opening, even after an earlier Trennen. Native code rechecks
+revision, grants and idle ownership. Regular state polling never enables intent;
+Notification Trennen stops search until the next opening or downward pull.
+The downward-pull action uses the existing manual start command to enable intent;
+an active/searching native run is retained without duplication. There are no Android connect/forget
+buttons or device lists. No boot/process-start receiver is added.
 
 ## One persistent owner
 
@@ -23,6 +25,15 @@ binding or updated address is saved only after the core's correlated STATUS and
 final Control write complete. The previously stored UUID and the revision captured
 at start must still match. Info alone, mismatches and late callbacks cannot save.
 Migration is the one-time import of the already validated legacy binding.
+
+The native binary record now writes magic **BLB2** and a top-level
+`connectionEnabled` flag, including when binding is null. Existing **BLB1**
+records remain readable without rewriting: a present binding retains its flag,
+while an old empty migration/tombstone defaults to discovery enabled. The next
+actual mutation writes BLB2 with the existing identity/address and next revision.
+For bound records, nested/top-level flags must agree. Trennen persists false even
+before the first sensor; a new app opening enables discovery again.
+The path remains `ble-binding-v1.bin`; this is not a SQLite schema change.
 
 The file `noBackupFilesDir/ble-binding-v1.bin` is the only native source of truth.
 It is a bounded, versioned binary record with a CRC; it contains no LIVE_SAMPLE,
