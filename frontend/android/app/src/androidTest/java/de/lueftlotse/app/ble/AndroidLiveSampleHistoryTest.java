@@ -47,7 +47,12 @@ public class AndroidLiveSampleHistoryTest {
             @Override public Context getApplicationContext() { return this; }
             @Override public File getNoBackupFilesDir() { return directory; }
         };
-        store = new AndroidLiveSampleStore(context);
+        store = new AndroidLiveSampleStore(
+            context,
+            () -> 3000,
+            () -> 0,
+            error -> fail(error.toString())
+        );
     }
 
     @After public void tearDown() {

@@ -655,63 +655,89 @@ SQLiteOpenHelper without an additional dependency. Its database is
 it survives app restarts/updates but is excluded from backup and lost on uninstall
 or app data clearing.
 
-### Native SQLite retention policy
+### Native SQLite retention policy: eight days
 
-Received measurements in `no_backup/live-samples-v1.db` are retained indefinitely.
-There is no application-defined age/TTL, maximum record count, rolling buffer,
-retention cleanup, automatic eviction or deletion of old measurements. Starting
-or reopening the app/service, reconnecting, receiving a new bootId, and updating
-the APK without clearing data do not clear history. Reading a period and the
-1-50-row history page size limit only the query/result page; they do not limit
-the number of rows kept on disk. No startup or reconnect path deletes this DB.
+Android keeps received measurements for the last **8 x 24 hours** (691200000 ms),
+using the saved phone receipt timestamp `measured_at`. Cleanup deletes only rows
+with `measured_at < current phone wall time - 691200000`; a row exactly on the
+eight-day boundary is retained. This is a fixed elapsed duration, not eight local
+calendar dates, and does not use sensor uptime or bootId. Changes to the phone's
+wall clock affect the cutoff. There is no maximum record count or rolling count
+buffer. Browser IndexedDB and its retention behavior are unchanged.
 
-The current schema remains version 1. Unsupported schema upgrades/downgrades
-fail instead of dropping or recreating the existing history. Future migrations
-must preserve measurements; destructive fallback is not an accepted migration.
-Both writer and read-only history opens explicitly replace Android's default
-corruption handler: the platform default can delete a corrupt database even
-when the caller only tried to read it. The native handler instead raises
-`Native history corruption detected; database files retained`, without deleting,
-replacing or truncating the database. It preserves the files for diagnosis; it
-does not repair corruption or promise that damaged data remains readable.
+`AndroidLiveSampleStore.onOpen` runs cleanup when its writable database opens.
+During recording, cleanup is attempted at most once per hour, checked before
+inserting a sample. Both startup cleanup and periodic DELETE execute on the
+existing serial LiveSampleWriter disk worker, outside BLE callbacks and the main
+looper. The hourly cadence uses elapsedRealtime, separately from the wall-clock
+retention cutoff. The SQL DELETE is not run for every sample. There is no alarm
+or background wakeup when recording is idle; the next write after the interval,
+or the next database opening, performs cleanup. Thus expired rows can remain
+until that next cleanup. The independent read-only history reader does not delete.
 
-Every insertion is transactional with insertOrThrow; failed inserts/conflicts
-roll back and preserve previously committed rows. The writer reports failures
-through Logcat (`SensorBleService`, including deviceId/bootId/sampleCounter) and
-`getState().liveStorageError`; a failure is not acknowledged as a duplicate or
-replaced with an empty database. Reader failures reject the history request.
-Storage exhaustion is an explicit write error, not a trigger to evict history.
-Only available device space and SQLite/filesystem limits constrain growth; no
-application retention quota is introduced. Uninstall, Android Clear storage,
-physical storage damage and uncommitted receipts at process death are outside
-this retention guarantee. Normal APK updates preserve the existing files.
+Each cleanup has its own transaction. If it fails, the deletion is rolled back,
+the file and existing rows are retained, and an explicit error is logged with
+`LIVE_SAMPLE retention cleanup failed` and exposed in `getState().liveStorageError`.
+The attempted time is recorded even on failure, so the next sample does not
+immediately retry DELETE; retry waits for the hourly interval or a new opening.
+An ordinary cleanup failure does not prevent the subsequent sample INSERT from
+being attempted. INSERT errors remain separate errors, never duplicate success.
 
-Retention audit and targeted verification (2026-11-18): no explicit age/count
-limit, startup/reconnect cleanup or destructive schema migration was found.
-The only changed runtime behavior is replacing the destructive platform-default
-corruption handler on both writer and reader opens; schema/version, recording,
-pagination, service recovery and browser IndexedDB remain unchanged. The handler
-behavior was checked against the installed Android 36 SDK source.
+The database schema/version remain 1; no migration or full clear is introduced.
+Reconnection and APK update do not delete the database file; the eight-day policy
+is applied on subsequent writable opening/recording. The 1-50-row history page
+size is a query limit, not a storage count cap. Unsupported schema upgrades or
+downgrades still fail without destructive recreation. Both writer and read-only
+history opens retain the non-destructive corruption handler: corruption raises
+an error instead of invoking Android's default database deletion. Preserving
+corrupt files does not repair them or guarantee readability. Storage exhaustion
+is an explicit error, not permission to wipe the DB or evict rows inside the
+retention window. Uninstall/Clear storage and physical damage remain outside
+this policy; receipts not committed before process death can still be lost.
 
-Four LiveSampleWriter JVM tests passed. On POCO the isolated target
-`de.lueftlotse.app.sqlitetest` ran nine AndroidLiveSampleStoreTest and six
-AndroidLiveSampleHistoryTest cases. Fourteen passed initially; the corruption
-case's reader-error wording expectation was too narrow (SQLite returned its own
-explicit exception). After changing that assertion to verify the error plus
-unchanged file bytes, only that case was rebuilt/repeated and passed. All fifteen
-SQLite checks are therefore covered, including preservation of 65 old/new rows
-across reopen (beyond the 50-row page size), existing rows/IDs/timestamps after an
-injected INSERT failure and reopen, and byte-for-byte preservation of a corrupt
-file after both writer and read-only history attempts. Existing history sorting,
-period boundaries, pagination and deduplication checks passed as well.
+Earlier corruption-protection verification passed four LiveSampleWriter JVM tests
+and fifteen isolated SQLite checks, including unchanged corrupt-file bytes,
+rollback of failed INSERT and history reads. Those are earlier results; the
+changed eight-day cleanup was verified separately as follows.
 
-Both instrumentation suites assert the isolated target package before creating
-random direct children of its no_backup and clean up only those children. No test
-subdirectories remained after execution; unrelated pre-existing isolated-app
-files were left alone. Only isolated test APKs were updated. The main APK and
-its phone history were not updated or cleared, and this fix has not yet been
-installed into the main phone app. git diff --check passed. Test APKs/logs remain
-outside Git in the existing TEMP SQLite-test directory.
+Eight-day cleanup verification (2026-11-18): all **20** targeted instrumentation
+cases passed on POCO in `de.lueftlotse.app.sqlitetest` (14 store and 6 history
+cases). Injected wall/elapsed clocks verified strict deletion before the cutoff,
+retention of the exact boundary/fresh rows and their IDs, empty database/schema
+preservation, and no periodic DELETE before the full hourly interval. A failing
+DELETE trigger using RAISE(FAIL) verified rollback even after an earlier deletion
+in the statement, explicit cleanup error reporting, preserved file/old rows,
+continued fresh INSERTs and throttled retry followed by recovery. A separate
+case covered failure during periodic cleanup. Corrupt-file preservation,
+deduplication, failed INSERT rollback, all history sorts, boundaries and paging
+also passed. Existing synthetic-timestamp fixtures use an injected fixed clock;
+this changes test time, not the production retention policy.
+
+During those instrumentation tests only isolated test APKs were built/updated;
+the main phone APK and its history were not touched. No browser code or schema
+was changed. Test reports remain outside Git. git diff --check passed.
+
+All SQLite instrumentation uses only `de.lueftlotse.app.sqlitetest`, with an exact
+target-package assertion before creating random direct children of its no_backup.
+Cleanup of test artifacts is limited to those children. Test APKs and logs remain
+outside Git.
+
+Separate main-app verification on POCO (2026-11-18): the normal debug APK for
+`de.lueftlotse.app` was built and installed as an update, without uninstalling or
+clearing data. Before first opening it, a read-only snapshot contained 18,810
+rows; the oldest receipt was 2026-11-11 11:48:37.615 CET. After opening and
+reconnecting, another snapshot contained 18,817 rows: seven new real sensor
+receipts, with no previous IDs or stored fields lost or changed. The Android
+history displayed 50 rows and offered Weitere laden; the bridge reported no
+storage error, and SQLite integrity_check returned ok. Snapshots were copied
+with stable-file hash checks and queried read-only on the host.
+
+There were no rows older than eight days or exactly at the cutoff in the real
+phone history. Consequently this main-app check confirms preserved existing
+data, new recording and history access, but does not confirm real-data deletion
+or exact-boundary retention. Those cases were verified by the isolated tests
+above, not by this hardware check. No synthetic rows were inserted into the
+main database and the phone clock was not changed.
 
 The `live_samples` table stores a generated measurement UUID, deviceId, bootId,
 sampleCounter, uptimeMs, ppm, measured_at and source=`sensor`. Both uint64 fields
@@ -728,8 +754,8 @@ Activity/WebView does not own or shut down the queue. The last storage failure
 is logged and remains in `getState().liveStorageError` across subsequent reads,
 successful writes and new sessions within the process. Reading this field does
 not perform disk IO. The shared Android history UI uses the read-only reader below.
-There is no HTTP upload, boot startup, automatic retry of failed receipts,
-retention pruning or gap recovery in this path. System service recreation may
+There is no HTTP upload, boot startup, automatic retry of failed receipts or
+gap recovery in this path. Retention cleanup follows the eight-day policy above. System service recreation may
 resume recording as described above.
 
 Commit is the durability boundary: process death before commit can lose an

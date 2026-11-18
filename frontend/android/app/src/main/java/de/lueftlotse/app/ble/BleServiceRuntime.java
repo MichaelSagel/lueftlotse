@@ -52,7 +52,11 @@ public final class BleServiceRuntime {
         if (liveSamples == null) {
             Context application = context.getApplicationContext();
             liveSamples = new LiveSampleWriter(
-                () -> new AndroidLiveSampleStore(application),
+                () -> new AndroidLiveSampleStore(application, error -> {
+                    String message = "LIVE_SAMPLE retention cleanup failed: " + error;
+                    STATE.liveStorageError(message);
+                    android.util.Log.e("SensorBleService", message, error);
+                }),
                 (sample, error) -> {
                     String message = "LIVE_SAMPLE storage [" + sample.deviceId + "/" + sample.bootId
                         + "/" + sample.sampleCounter + "]: " + error;

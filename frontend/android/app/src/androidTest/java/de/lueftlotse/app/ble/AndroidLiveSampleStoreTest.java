@@ -13,7 +13,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -46,7 +48,7 @@ public class AndroidLiveSampleStoreTest {
             @Override public Context getApplicationContext() { return this; }
             @Override public File getNoBackupFilesDir() { return directory; }
         };
-        store = new AndroidLiveSampleStore(context);
+        store = newStore();
     }
 
     @After public void tearDown() {
@@ -63,6 +65,15 @@ public class AndroidLiveSampleStoreTest {
                 assertTrue("Cannot remove isolated test directory: " + directory, directory.delete());
             }
         }
+    }
+
+    private AndroidLiveSampleStore newStore() {
+        return new AndroidLiveSampleStore(
+            context,
+            () -> 3000,
+            () -> 0,
+            error -> fail(error.toString())
+        );
     }
 
     private NativeLiveSample sample(String boot, BigInteger counter, BigInteger uptime, int ppm, long time) {
@@ -90,7 +101,7 @@ public class AndroidLiveSampleStoreTest {
         store.save(sample(ID, BigInteger.ONE, BigInteger.TEN, 800, 1000));
         String[] original = onlyRow();
         store.close();
-        store = new AndroidLiveSampleStore(context);
+        store = newStore();
         store.save(sample(ID, BigInteger.ONE, BigInteger.TEN, 800, 9999));
         assertArrayEquals(original, onlyRow());
         assertEquals("1000", original[1]);
@@ -118,7 +129,7 @@ public class AndroidLiveSampleStoreTest {
     @Test public void maximumUint64SurvivesDiskReopenAsText() {
         store.save(sample(ID, UInt64.MAX, UInt64.MAX, 2100, 1234));
         store.close();
-        store = new AndroidLiveSampleStore(context);
+        store = newStore();
         String[] row = onlyRow();
         assertEquals("18446744073709551615", row[2]);
         assertEquals("18446744073709551615", row[3]);
@@ -155,21 +166,144 @@ public class AndroidLiveSampleStoreTest {
         assertArrayEquals(original, onlyRow());
     }
 
-    @Test public void oldHistorySurvivesReopenBeyondHistoryPageSize() {
+    @Test public void retainedHistorySurvivesReopenBeyondHistoryPageSize() {
         for (int i = 1; i <= 64; i++) {
             store.save(sample(ID, BigInteger.valueOf(i), BigInteger.valueOf(i), 800, i));
         }
-        store.save(sample(ID, BigInteger.valueOf(65), BigInteger.valueOf(65), 900, 1795000000000L));
+        store.save(sample(ID, BigInteger.valueOf(65), BigInteger.valueOf(65), 900, 2000));
         store.close();
-        store = new AndroidLiveSampleStore(context);
+        store = newStore();
         try (Cursor rows = store.getReadableDatabase().rawQuery(
             "SELECT COUNT(*), MIN(measured_at), MAX(measured_at) FROM live_samples", null
         )) {
             assertTrue(rows.moveToFirst());
             assertEquals(65, rows.getInt(0));
             assertEquals(1, rows.getLong(1));
-            assertEquals(1795000000000L, rows.getLong(2));
+            assertEquals(2000, rows.getLong(2));
         }
+    }
+
+    private void add(int counter, long time) {
+        store.save(sample(ID, BigInteger.valueOf(counter), BigInteger.valueOf(counter), 800, time));
+    }
+
+    private int count() {
+        try (Cursor rows = store.getReadableDatabase().rawQuery("SELECT COUNT(*) FROM live_samples", null)) {
+            assertTrue(rows.moveToFirst());
+            return rows.getInt(0);
+        }
+    }
+
+    private String idFor(int counter) {
+        try (Cursor rows = store.getReadableDatabase().rawQuery(
+            "SELECT measurement_id FROM live_samples WHERE sample_counter = ?",
+            new String[] { Integer.toString(counter) }
+        )) {
+            return rows.moveToFirst() ? rows.getString(0) : null;
+        }
+    }
+
+    @Test public void openingDeletesOnlyStrictlyOlderThanEightDays() {
+        add(1, 999);
+        add(2, 1000);
+        add(3, 1001);
+        String boundaryId = idFor(2);
+        String freshId = idFor(3);
+        store.close();
+        store = new AndroidLiveSampleStore(context,
+            () -> AndroidLiveSampleStore.RETENTION_MS + 1000, () -> 0, error -> fail(error.toString()));
+        assertEquals(2, count());
+        assertNull(idFor(1));
+        assertEquals(boundaryId, idFor(2));
+        assertEquals(freshId, idFor(3));
+        assertEquals(1, store.getReadableDatabase().getVersion());
+    }
+
+    @Test public void emptyDatabaseCleanupKeepsTheFileAndSchema() {
+        store.close();
+        store = new AndroidLiveSampleStore(context,
+            () -> AndroidLiveSampleStore.RETENTION_MS + 1000, () -> 0, error -> fail(error.toString()));
+        assertEquals(0, count());
+        assertTrue(new File(directory, AndroidLiveSampleStore.DATABASE_NAME).exists());
+        assertEquals(1, store.getReadableDatabase().getVersion());
+    }
+
+    @Test public void cleanupDuringRecordingRunsHourlyInsteadOfOnEverySample() {
+        store.close();
+        long[] wall = { AndroidLiveSampleStore.RETENTION_MS + 1000 };
+        long[] elapsed = { 0 };
+        store = new AndroidLiveSampleStore(context, () -> wall[0], () -> elapsed[0], error -> fail(error.toString()));
+        add(1, 1000);
+        add(2, 1001);
+        String boundaryId = idFor(2);
+        wall[0]++;
+        elapsed[0] = AndroidLiveSampleStore.CLEANUP_INTERVAL_MS - 1;
+        add(3, wall[0]);
+        assertNotNull(idFor(1));
+        assertEquals(3, count());
+        elapsed[0]++;
+        add(4, wall[0]);
+        assertNull(idFor(1));
+        assertEquals(boundaryId, idFor(2));
+        assertEquals(3, count());
+    }
+
+    @Test public void failedOpeningCleanupRollsBackAndRetriesOnlyAfterInterval() {
+        add(1, 998);
+        add(2, 999);
+        add(3, 1000);
+        String firstId = idFor(1);
+        store.getWritableDatabase().execSQL(
+            "CREATE TRIGGER reject_cleanup BEFORE DELETE ON live_samples WHEN OLD.sample_counter = '2' "
+                + "BEGIN SELECT RAISE(FAIL, 'Injected cleanup failure'); END"
+        );
+        store.close();
+        List<Exception> errors = new ArrayList<>();
+        long[] elapsed = { 0 };
+        long now = AndroidLiveSampleStore.RETENTION_MS + 1000;
+        store = new AndroidLiveSampleStore(context, () -> now, () -> elapsed[0], errors::add);
+        assertEquals(3, count());
+        assertEquals(1, errors.size());
+        assertTrue(errors.get(0).getMessage().contains("Injected cleanup failure"));
+        assertEquals(firstId, idFor(1));
+        add(4, now);
+        assertEquals(4, count());
+        assertEquals(1, errors.size());
+        store.getWritableDatabase().execSQL("DROP TRIGGER reject_cleanup");
+        elapsed[0] = AndroidLiveSampleStore.CLEANUP_INTERVAL_MS - 1;
+        add(5, now);
+        assertEquals(5, count());
+        elapsed[0]++;
+        add(6, now);
+        assertEquals(4, count());
+        assertNull(idFor(1));
+        assertNull(idFor(2));
+        assertNotNull(idFor(3));
+        assertTrue(new File(directory, AndroidLiveSampleStore.DATABASE_NAME).exists());
+    }
+
+    @Test public void failedPeriodicCleanupPreservesRowsAndAllowsFreshWrites() {
+        store.close();
+        long[] wall = { AndroidLiveSampleStore.RETENTION_MS + 1000 };
+        long[] elapsed = { 0 };
+        List<Exception> errors = new ArrayList<>();
+        store = new AndroidLiveSampleStore(context, () -> wall[0], () -> elapsed[0], errors::add);
+        add(1, 1000);
+        String originalId = idFor(1);
+        store.getWritableDatabase().execSQL(
+            "CREATE TRIGGER reject_cleanup BEFORE DELETE ON live_samples "
+                + "BEGIN SELECT RAISE(FAIL, 'Injected periodic cleanup failure'); END"
+        );
+        wall[0]++;
+        elapsed[0] = AndroidLiveSampleStore.CLEANUP_INTERVAL_MS;
+        add(2, wall[0]);
+        assertEquals(1, errors.size());
+        assertEquals(originalId, idFor(1));
+        assertEquals(2, count());
+        add(3, wall[0]);
+        assertEquals(1, errors.size());
+        assertEquals(3, count());
+        assertTrue(new File(directory, AndroidLiveSampleStore.DATABASE_NAME).exists());
     }
 
     @Test public void failedInsertPreservesExistingHistoryAfterReopen() {
@@ -183,7 +317,7 @@ public class AndroidLiveSampleStoreTest {
             sample(ID, BigInteger.valueOf(2), BigInteger.valueOf(20), 900, 2000)
         ));
         store.close();
-        store = new AndroidLiveSampleStore(context);
+        store = newStore();
         assertArrayEquals(original, onlyRow());
     }
 

@@ -7,19 +7,40 @@ import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.os.SystemClock;
 import java.io.File;
 import java.util.UUID;
+import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 /** Native-only history. Construct, open, query and close exclusively on the disk queue. */
 final class AndroidLiveSampleStore extends SQLiteOpenHelper implements LiveSampleWriter.Store {
     static final String DATABASE_NAME = "live-samples-v1.db";
+    static final long RETENTION_MS = 8L * 24 * 60 * 60 * 1000;
+    static final long CLEANUP_INTERVAL_MS = 60L * 60 * 1000;
     // The platform default deletes corrupt databases, including on read-only opens.
     static final DatabaseErrorHandler PRESERVE_HISTORY = database -> {
         throw new SQLiteException("Native history corruption detected; database files retained");
     };
+    private final LongSupplier wallClock;
+    private final LongSupplier elapsedClock;
+    private final Consumer<Exception> cleanupErrors;
+    private boolean cleanupAttempted;
+    private long lastCleanupElapsed;
 
     AndroidLiveSampleStore(Context context) {
+        this(context, error -> android.util.Log.e("SensorBleService", "LIVE_SAMPLE retention cleanup failed", error));
+    }
+
+    AndroidLiveSampleStore(Context context, Consumer<Exception> cleanupErrors) {
+        this(context, System::currentTimeMillis, SystemClock::elapsedRealtime, cleanupErrors);
+    }
+
+    AndroidLiveSampleStore(Context context, LongSupplier wallClock, LongSupplier elapsedClock, Consumer<Exception> cleanupErrors) {
         super(context.getApplicationContext(), path(context), null, 1, PRESERVE_HISTORY);
+        this.wallClock = wallClock;
+        this.elapsedClock = elapsedClock;
+        this.cleanupErrors = cleanupErrors;
     }
 
     private static String path(Context context) {
@@ -46,8 +67,39 @@ final class AndroidLiveSampleStore extends SQLiteOpenHelper implements LiveSampl
         throw new SQLiteException("Unsupported native measurement schema upgrade");
     }
 
+    @Override public void onOpen(SQLiteDatabase database) {
+        super.onOpen(database);
+        if (!database.isReadOnly()) {
+            cleanup(database, true);
+        }
+    }
+
+    private void cleanup(SQLiteDatabase database, boolean opening) {
+        long elapsed = elapsedClock.getAsLong();
+        if (!opening && cleanupAttempted && elapsed >= lastCleanupElapsed
+                && elapsed - lastCleanupElapsed < CLEANUP_INTERVAL_MS) {
+            return;
+        }
+        // Throttle failed attempts too; a full/locked disk must not trigger DELETE on every sample.
+        cleanupAttempted = true;
+        lastCleanupElapsed = elapsed;
+        try {
+            long cutoff = Math.subtractExact(wallClock.getAsLong(), RETENTION_MS);
+            database.beginTransaction();
+            try {
+                database.delete("live_samples", "measured_at < ?", new String[] { Long.toString(cutoff) });
+                database.setTransactionSuccessful();
+            } finally {
+                database.endTransaction();
+            }
+        } catch (Exception error) {
+            cleanupErrors.accept(error);
+        }
+    }
+
     @Override public void save(NativeLiveSample sample) {
         SQLiteDatabase database = getWritableDatabase();
+        cleanup(database, false);
         database.beginTransaction();
         try {
             try (Cursor existing = database.query(
