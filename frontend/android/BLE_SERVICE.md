@@ -15,9 +15,11 @@ identity check, handshake and native SQLite writer. An active/reserved run is
 never duplicated. Missing/disabled records or permissions stop recovery; corrupt
 or unreadable binding is reported as an error and never overwritten.
 
-Trennen persists false before closing and stopping the service. A notification
-action delivered into a freshly recreated process also disables the saved intent
-before any recovery. System recovery never reenables false. Visible-app opening
+The internal disconnect command persists false before closing and stopping the
+service. Its service-intent handler also disables saved intent when delivered
+into a freshly recreated process before recovery. There is no disconnect action
+on the current Android main screen or service notification. System recovery never
+reenables false. Visible-app opening
 and pull-to-refresh retain their existing behavior and may enable it explicitly.
 Process death loses the preview, transport/timers and uncommitted writer queue;
 committed SQLite data remains. Restart timing and OEM behavior are not guaranteed;
@@ -234,9 +236,10 @@ has no sensor-selection dialog, device list, Verbinden or forget button.
 During discovery the CO2 card shows **Sensor wird gesucht …**. There are no
 connection buttons on the Android main screen. The service notification has no
 connection-control action and requests VISIBILITY_SECRET on the lock screen.
-Within the same visible opening,
-polling cannot restart them; pulling down, returning to the app or attaching
-a fresh UI starts again. A saved deviceId is checked on every handshake; no other identity is bound.
+After an internal disconnect, polling in the same visible opening cannot
+restart discovery; pulling down, returning to the app or attaching a fresh UI
+can enable connection intent again. A saved deviceId is checked on every
+handshake; no other identity is bound.
 
 With an enabled binding, the first attempt uses the saved address directly.
 After failure, `ServiceDiscovery` runs 8-second scan windows separated by
@@ -249,15 +252,17 @@ identity in the existing handshake, even if a discovered address changed.
 Wrong-identity/unsupported candidates are quarantined for this run; a different
 sensor is never silently bound. LIVE_SAMPLE support is checked before binding.
 
-With no binding, one service advertiser is connected automatically. Several
-advertisers pause discovery and expose only those candidates for explicit
-selection; protocol/identity compatibility is verified when connecting. No
-unfiltered device picker is opened. Choice commands carry the current runId;
-stale addresses are rejected. Each attempt repeats the regular handshake.
+With no binding, one service advertiser is connected automatically; protocol
+compatibility is verified by handshake. Several advertisers pause discovery in
+the native choice state. The bridge retains candidates/choice commands with the
+current runId, but the current Android screen deliberately renders no list or
+selection action. It cannot resolve this multiple-candidate state through the
+UI. Stale addresses are rejected. No unfiltered picker is opened.
 
-Trennen from UI or notification disables durable connection intent, cancels the
-scan/timer and current GATT attempt, and fences late callbacks. Intent also
-persists when no sensor has ever been bound. The internal forget bridge remains available but has no Android UI action. No boot auto-start, SQLite migration or CO2-alert change is added; system process recovery is described above.
+The internal disconnect bridge/service intent disables durable connection intent,
+cancels the scan/timer and current GATT attempt, and fences late callbacks.
+Neither the current main screen nor the service notification offers Trennen.
+Intent also persists when no sensor has ever been bound. The internal forget bridge remains available but has no Android UI action. No boot auto-start, SQLite migration or CO2-alert change is added; system process recovery is described above.
 Scan permission is required (BLUETOOTH_SCAN on API 31+, fine location on older
 Android, plus background location on API 29–30). Android 11 users may need to
 select Standort / Immer zulassen in app settings; the UI explicitly reports
@@ -473,10 +478,16 @@ observers, screenshots/APKs and raw logs are excluded from repository changes.
 
 ## Legacy explicit-address reconnection
 
+This section describes the retained internal startSaved/ServiceReconnect path,
+not the current automatic-discovery UI. References to former UI/notification
+controls below are historical test context; those controls are absent today.
+Current opening/pull behavior uses ServiceDiscovery as described above.
+
 `ServiceReconnect` is created by an explicit service start and is armed only
 after that run completes the normal Info/CCCD/STATUS handshake and confirms the
-saved binding. A visible app opening may request `startSaved`; constructors,
-null restart intents, process restart alone and phone boot never schedule it.
+saved binding. An explicit internal command may request `startSaved`; current
+visible-app discovery uses `startDiscovery`, and a system restart enters
+ServiceRecovery instead. Phone boot never schedules it.
 
 An unexpected physical close is retryable only after confirmed native GATT
 cleanup and while the logical run has not been stopped. The foreground service
@@ -494,21 +505,21 @@ notification subscription and the correlated handshake. A typed
 uncertain GATT cleanup, unreadable/changed intent or missing permissions also
 stop retries rather than opening another GATT. No identity is silently replaced.
 
-`Trennen` in the UI or notification and `Gerät vergessen` retain the existing
-durable disable/tombstone-before-close actions. The close path always cancels the
+Internal disconnect and forget commands retain the existing durable
+disable/tombstone-before-close actions. The close path always cancels the
 timer and current attempt, even if intent persistence failed. Epoch checks fence
 already delivered timers, and physical connection checks fence late READY/live/
 close callbacks. A cancelled run cannot re-enable its binding through a late
 handshake. The confirmed binding revision is carried forward after the first
 handshake so a later retry does not fail against its own saved revision.
 
-The logical runId remains stable across retries, including the notification's
-Trennen action. Each physical attempt has a different connectionId in getState;
+The logical runId remains stable across retries. Each physical attempt has a
+different connectionId in getState;
 reconnecting=true identifies retry waiting/connecting. The Android facade resets
 preview counters and journal capabilities when connectionId changes, even if a
-hidden WebView missed the entire retry. The common button remains Trennen and
-cancellable during native retries; browser sessions do not expose this flag and
-their behavior is unchanged. Explicit closeSession/unsafe journal cancellation
+hidden WebView missed the entire retry. There is no Android connection button
+and no notification action; browser sessions do not expose this native flag.
+Explicit closeSession/unsafe journal cancellation
 ends this logical run as before; it does not start a retry loop.
 
 Targeted tests cover backoff/cap, one attempt, saved-intent/permission checks,
@@ -517,13 +528,10 @@ physical callbacks, identity rejection and no startup from a saved flag alone.
 The on-device reconnect check is separate from the earlier storage/history
 experiments below: those earlier results do not verify reconnection.
 
-For that hardware check, connect the saved sensor and record its current bootId,
-then background the UI, lock the screen and restart the ESP32. Verify a closed
-attempt, a delayed retry with the same deviceId, a fresh handshake and saved
-receipts with the new bootId during the locked interval. After notification/UI
-Trennen, restart the ESP32 again and observe at least 60 seconds: no new attempt,
-no new receipts, service stopped and saved connectionEnabled=false. Inspect only
-a read-only database snapshot after the service/write queue has stopped.
+The earlier hardware checks below used connection controls available at their
+recorded date. They remain evidence for reconnect/cancellation in those versions,
+not instructions to find a Trennen action in the current app. No new hardware
+result is inferred from a retained test or the sticky-recovery implementation.
 
 Initial reconnect verification passed 40 targeted app JVM tests (including 11
 reconnect cases), 6 transport race/identity tests and 35 UI/facade scenarios.
@@ -957,6 +965,10 @@ prolonged deep Doze. Raw logs/database copies stay outside the repository.
 
 ## POCO visible-app startup verification (2026-11-16)
 
+Historical result before automatic discovery and removal of connection controls.
+The current app opening can enable intent again; the former disabled-after-
+Trennen opening behavior and buttons below are not current instructions.
+
 The updated main debug APK (`de.lueftlotse.app`, not the isolated SQLite test
 package) was installed with `adb install -r`; app data was not cleared.
 With the phone unlocked, ESP32 available, existing grants and saved enabled
@@ -1005,7 +1017,8 @@ Unreadable latch state fails closed and is logged, without changing measurements
 
 The separate high-importance channel is **co2_high_v1** (CO2 warnings), notification
 ID **4102**; the ongoing Sensor connection notification remains ID **4101**,
-without action buttons and with VISIBILITY_SECRET. App permission and the alert channel setting are checked independently.
+without action buttons and with VISIBILITY_SECRET. App permission and the alert
+channel setting are checked independently.
 If permission is denied, no notification is attempted and no warned latch is
 consumed; a later permitted fresh high receipt may confirm the existing duration.
 A permission race or notification exception after the latch commit is logged and

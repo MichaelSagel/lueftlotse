@@ -14,15 +14,18 @@ automatic fallback. Reconnect requires another handshake and a new sample.
 The German labels are **CO₂-Wert akzeptabel** below 1000 ppm, **Bitte lüften**
 at 1000–1999 ppm, and **Hoher CO₂-Wert** with **Bitte lüften** from 2000 ppm.
 Android additionally warns after fresh native LIVE_SAMPLE values stay at or above
-2000 ppm for 30 seconds. A fresh value below 1800 ppm rearms the warning;
-reconnection alone does not. This uses a separate notification channel without
+2000 ppm for at least 30 seconds, confirmed by a further fresh receipt using
+monotonic time. A disconnect, stale data or value below 2000 resets an unfinished
+countdown. Only one warning is sent per episode. A fresh value below 1800 ppm
+rearms the warning; reconnection alone does not. This uses a separate notification channel without
 WebView/backend involvement; denied notifications do not block BLE/SQLite.
 
 Browser and Android now share the simplified single-column UI at every screen
 width (maximum 440 CSS pixels, centered). The only permanent connection action
 is **Sensor auswählen** / **Trennen** in browsers. Android has no connection-control buttons or BLE-device list. A downward pull
-from the top resumes connection when idle and retains an active/searching run;
-Trennen remains in the unchanged Android service notification. Its CO2 card displays **Sensor wird gesucht …** during search.
+from the top resumes connection when idle and retains an active/searching run.
+The foreground service notification has no action buttons and uses
+VISIBILITY_SECRET to hide it from the lock screen. Its CO2 card displays **Sensor wird gesucht …** during search.
 There is no Sensor badge, local-history
 chart/disclosure, manual synchronization block, journal-download button or extra
 threshold footer. Existing local storage, journal and HTTP synchronization
@@ -31,24 +34,37 @@ implementations remain available internally and are not rewritten by this UI cha
 Browser LIVE_SAMPLE records are saved in IndexedDB and automatically uploaded;
 MeasuredAt is browser reception time. Android stores received LIVE_SAMPLE in
 native SQLite independently of the WebView; its timestamp is phone reception
-time. The single shared history view reads Android SQLite locally and PostgreSQL
+time. Records strictly older than 8 x 24 hours are removed on writable opening
+and at most hourly during recording; the exact boundary is retained. Cleanup
+runs on the serial disk worker, not the UI or BLE callback thread. Corrupt files
+are retained with an explicit error instead of being deleted or recreated.
+The single shared history view reads Android SQLite locally and PostgreSQL
 through the API in browsers. No Android HTTP upload is added.
 
 The page and DeviceDiscovery share the same route-scoped BLE
-session. On Android the native service keeps this connection when the device selector is
-closed, the app is backgrounded or the screen is locked. Returning to the UI
+session. On Android the native service keeps this connection when the app is
+backgrounded or the screen is locked; recording does not require a WebView.
+Returning to the UI
 restores the last valid sample with its original age and remaining 15-second
 lifetime; stale data remains unavailable. Android retries an unexpected drop of
 a confirmed saved sensor within the live service, with delays capped at 30 seconds.
 Opening the visible Android app enables automatic connection to the saved sensor
 when permissions are granted and no service run is active. Android first tries
 the saved address, then native service-UUID-filtered scan windows with pauses.
-Every handshake verifies the saved deviceId. Trennen stops connection and search
-until the app is opened again or a downward pull resumes it; state polling cannot restart them. No generic
-picker or device list is shown.
-Ordinary process death can be followed by Android sticky-service recreation
-using the saved enabled binding, without WebView. Restart timing is not guaranteed.
-Force-stop and OEM restrictions can still prevent recovery; no boot startup is added. Browser reconnection
+Every handshake verifies the saved deviceId; another sensor is never silently
+bound. No generic picker or device list is shown. Without a binding, one service
+advertiser can be connected automatically. Multiple candidates pause discovery;
+the current Android screen has no selection UI. Internal disconnect/forget
+commands remain available through the bridge, not through screen or notification
+buttons. A fresh app opening or downward pull can enable connection intent again;
+state polling cannot do so.
+START_STICKY and null-Intent recovery are implemented for a migrated, enabled
+saved binding with required permissions, without Activity/WebView. **Recovery
+after SIGKILL on POCO was not confirmed:** neither the main nor the isolated
+control service restarted during observation. The cause and behavior after other
+process-termination methods are unknown. There is no force-stop bypass or boot
+startup; reopening the app is the available way to resume after a stopped process.
+Missing measurements are not backfilled. Browser reconnection
 behavior is unchanged; a foreground service is not an unlimited-execution guarantee.
 
 ## Shared BLE session contract
@@ -72,6 +88,8 @@ uses stable keysets over the whole period; an open cursor excludes later inserts
 until the user reloads. Storage errors are displayed, not replaced by empty data.
 See [native history details](android/BLE_SERVICE.md#reading-history-without-a-ble-service).
 
+### Browser: Web Bluetooth and server history
+
 In Chrome on Windows, **Sensor auswählen** opens the browser device chooser with
 the Lüftlotse service UUID filter. Use HTTPS or localhost with Web Bluetooth
 available. Cancelling the chooser leaves the session unchanged. The browser uses
@@ -81,13 +99,11 @@ the connection. Browser journal download is unavailable; received LIVE_SAMPLE va
 Switching tabs preserves the browser connection. Returning checks the original
 sample receipt age even when background timers were throttled; an expired value
 stays unavailable until a new valid LIVE_SAMPLE arrives. This is not a background-service guarantee.
+### Android: native session and internal journal contract
+
 Android continues to use NativeBleSession and its native binding repository.
-The shared connection action opens a temporary modal using the existing BleScanner;
-it does not enable the guarded plugin's requestDevice API or open another GATT owner.
-Selecting a device stops scanning before the existing session connects. Cancelling
-stops scanning; a saved device can be selected explicitly. Changing the saved device
-still requires the explicit **Gerät vergessen** action inside this selector. Native
-permissions and foreground-service ownership are unchanged.
+Android discovery runs in SensorBleService, not a WebView modal. Service-UUID
+filtering, serial scan windows and handshake identity validation are native.
 
 The page's Co2Monitor, DeviceDiscovery and BleJournalSync consume `BLE_SESSION`.
 On Android the route selects the same `NativeBleSession` instance for all three:
@@ -131,12 +147,14 @@ The [Android service foundation](android/BLE_SERVICE.md) adds an explicitly star
 `connectedDevice` foreground service and local `BleService` Capacitor plugin.
 It owns the native transport independently of Activity/WebView and exposes state
 and an in-memory LIVE_SAMPLE with its original monotonic receipt time. A quiet
-German service notification has **Trennen**. A native ownership guard rejects a
+German service notification has no actions and uses VISIBILITY_SECRET.
+A native ownership guard rejects a
 second connection. The installed BLE plugin only scans; its GATT and bonding calls
 are rejected even before migration. The UI requests Bluetooth/notification permissions
 from a visible Activity, then explicitly starts the service. Missing grants prevent
 GATT only when required Bluetooth/service grants are missing; notifications are
-optional. Process/boot auto-start is not implemented. Native LIVE_SAMPLE
+optional. Guarded sticky process recovery is implemented but not confirmed on
+POCO; boot auto-start is not implemented. Native LIVE_SAMPLE
 is stored in SQLite; unexpected drops after handshake use the live service's
 bounded-delay retry policy, independently of WebView lifetime.
 
@@ -174,10 +192,12 @@ reenables automatic connection; the Android UI has no selection/forget action.
 Every later connection must match the saved Info UUID. A mismatch closes the
 attempt without replacing the binding. The native forget bridge is retained
 internally; the Android screen does not offer device replacement. The same UUID at a new address updates that address only after
-another successful handshake. **Trennen** persists disabled intent before closing
+another successful handshake. The internal disconnect command persists disabled
+intent before closing
 the session, even when already disconnected or no run survived process restart.
 On persistence failure an existing session still closes and reports the error.
-Notification **Trennen** uses the same durable native action. Backgrounding and
+There is no notification disconnect action; the durable disconnect bridge is
+retained internally. Backgrounding and
 UI disposal revoke only journal clients. Radio loss without an explicit stop can
 retry the same saved sensor after confirmed cleanup; unsafe journal cancellation
 explicitly ends the run and does not retry.
@@ -198,8 +218,9 @@ the application's GATT session, and current firmware does not implement bonding.
 
 Tests recreate the application injector against the same fake IndexedDB to check
 restart persistence, UUID rejection, explicit disconnect/forget, late callbacks,
-pending writes and storage failures. Actual Android process-restart persistence
-still requires a device check when an APK is prepared.
+pending writes and storage failures. Committed native binding/SQLite files survive
+normal app updates; that storage property is separate from the unconfirmed
+system service restart after SIGKILL on POCO.
 
 ## Simulator tests and prototype accuracy
 
@@ -222,16 +243,15 @@ npm test -- --watch=false
 npm run build -- --configuration production
 ```
 
-Hardware checks still needed in the Android app with compatible firmware:
-
-1. Open the app: Sensor shows —, with no source picker, simulation controls or
-   prototype warning. No simulation, scan or connection starts automatically.
-2. Connect a device: the value stays — until a NEW sensor sample appears.
-3. Interrupt notifications for 15 seconds or disconnect: the reading clears and
-   unavailability is explicit. Reconnect waits for new data.
-4. Native journal persistence remains a separate technical path, covered by the
-   coordinator integration tests; the simplified UI has no journal-download action.
-   Browser notifications are saved and uploaded independently.
+Android hardware evidence and limitations are recorded in
+[BLE_SERVICE.md](android/BLE_SERVICE.md): background recording, native history,
+automatic discovery, locked-screen warning delivery with synthetic values, and
+hidden service notification were checked separately. Isolated SQLite tests cover
+eight-day cleanup and its exact boundary. The main POCO history contained no
+expired/boundary rows, so real-data pruning was not verified. Process recovery
+after SIGKILL failed in both main and control observations; it is not a verified
+capability. These checks do not establish prolonged deep-Doze behavior or sensor
+accuracy.
 
 See [BLE implementation notes](src/app/features/air-monitor/ble-protocol/README.md)
 for session validation, timer and persistence boundaries. Browser tests use a fake
@@ -280,17 +300,7 @@ To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use th
 ng test
 ```
 
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Local measurement synchronization
+## Browser measurement synchronization
 
 From the repository root, start the local API and Angular in separate terminals:
 
@@ -316,12 +326,16 @@ deleting history. Lost or invalid responses leave the packet pending; a later
 manual retry sends the same measurement IDs and accepts server duplicates.
 Errors stop the run; earlier confirmed packets remain synced. These internal
 runs have no retry loop of their own; BrowserBleSession separately schedules
-automatic sensor uploads and retries. IndexedDB v3 adds a sync-status index while retaining v1/v2
-history, primary keys, assigned IDs, metadata migration progress and simulator identity.
+automatic sensor uploads and retries. The current IndexedDB schema is v7;
+it preserves earlier history and checks
+both browserLiveSamples and legacy metadata deduplication receipts. See
+[browser persistence](src/app/features/air-monitor/data-access/browser-live-samples.md).
+This HTTP/IndexedDB path is separate from Android autonomous SQLite recording;
+Android sensor recording and history require neither backend nor adb reverse.
 
 ## Additional Resources
 
-### Android USB debug synchronization
+### Android USB debug API configuration (optional)
 
 Use the installed Android SDK Platform-Tools and JDK 21. Set `JAVA_HOME` and
 `ANDROID_HOME` only in the current terminal; no administrator rights are needed
@@ -345,10 +359,11 @@ adb -s <serial> reverse tcp:5045 tcp:5045
 adb -s <serial> reverse --list
 ```
 
-Install the debug APK manually. The simplified UI has no manual synchronization control; the existing native HTTP transport can be verified through integration tests. The app calls
-`http://127.0.0.1:5045/api` through USB with native CapacitorHttp; Angular's dev
-server, LAN exposure and CORS changes are unnecessary. Disconnecting USB can
-lose a response: pending measurements keep their IDs and can be retried manually.
+Install the debug APK manually. This optional build profile configures the
+existing native HTTP transport for `http://127.0.0.1:5045/api` through USB with
+CapacitorHttp. It does not upload native LIVE_SAMPLE SQLite history and the
+current Android UI has no synchronization control. Angular's dev server, LAN
+exposure and CORS changes are unnecessary for this optional transport check.
 Remove forwarding with `adb -s <serial> reverse --remove tcp:5045`.
 
 For release preparation use `npm --prefix frontend run android:prepare:release`,
