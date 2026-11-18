@@ -4,7 +4,6 @@ import android.app.*;
 import android.bluetooth.*;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
-import android.net.Uri;
 import android.os.*;
 import de.lueftlotse.app.MainActivity;
 import de.lueftlotse.app.R;
@@ -379,15 +378,13 @@ public final class SensorBleService extends Service {
         }
     }
     private Notification notification(String text) {
-        Intent disconnect = new Intent(this, SensorBleService.class).setAction(DISCONNECT).putExtra("runId", runId)
-                .setData(Uri.parse("lueftlotse:ble/" + runId));
-        PendingIntent action = PendingIntent.getService(this, 0, disconnect, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent content = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, BleServiceRuntime.CHANNEL) : new Notification.Builder(this);
         return builder.setSmallIcon(R.drawable.ic_ble_status).setContentTitle("Lüftlotse Sensor").setContentText(text)
                 .setContentIntent(content).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
                 .setCategory(Notification.CATEGORY_SERVICE).setPriority(Notification.PRIORITY_LOW)
-                .setSound(null).setVibrate(null).addAction(new Notification.Action.Builder(null, "Trennen", action).build()).build();
+                .setVisibility(Notification.VISIBILITY_SECRET)
+                .setSound(null).setVibrate(null).build();
     }
     private void updateServiceNotification(String text) {
         try {

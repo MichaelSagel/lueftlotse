@@ -232,8 +232,9 @@ the entire new search/connection loop under its SERVICE ownership lease; no
 WebView timer or plugin scanner is needed after startup. The normal Android UI
 has no sensor-selection dialog, device list, Verbinden or forget button.
 During discovery the CO2 card shows **Sensor wird gesucht …**. There are no
-connection buttons on the Android main screen. The unchanged service notification
-retains **Trennen** to stop connection and search. Within the same visible opening,
+connection buttons on the Android main screen. The service notification has no
+connection-control action and requests VISIBILITY_SECRET on the lock screen.
+Within the same visible opening,
 polling cannot restart them; pulling down, returning to the app or attaching
 a fresh UI starts again. A saved deviceId is checked on every handshake; no other identity is bound.
 
@@ -557,20 +558,41 @@ follow Android's [foreground service launch rules](https://developer.android.com
 and [connectedDevice prerequisites](https://developer.android.com/develop/background-work/services/fgs/service-types#connected-device).
 POST_NOTIFICATIONS and enabled notification channels no longer gate BLE,
 reconnection or SQLite recording. The mandatory foreground notification is still
-provided with **Trennen**; Android may hide it from the drawer when permission
+provided without action buttons; Android may hide it from the drawer when permission
 is denied. Only the separate CO2 alert requires visible-notification permission.
 See the [notification permission behavior](https://developer.android.com/develop/ui/views/notifications/notification-permission).
 
 The low-importance channel **Sensor-Verbindung** has no sound, vibration or badge.
 The ongoing notification is **Lüftlotse Sensor**, initially **Verbindung wird
-hergestellt**, then **Sensor verbunden** after handshake. Its **Trennen** action
-targets the non-exported service with an immutable PendingIntent and the runId.
-It persists disabled connection intent before closing that session and never
-schedules reconnect. A storage failure still closes the connection, leaves an
-explicit `bindingError` in state and shows a German error toast for notification
-actions. Bridge actions reject their promise instead of reporting success.
+hergestellt**, then **Sensor verbunden** after handshake. It has no **Trennen**
+action. This notification requests VISIBILITY_SECRET to hide
+service status from the lock screen while retaining the foreground service.
+The independent CO2 warning channel and its lock-screen visibility are unchanged.
+Existing Android channel/user settings may affect the effective visibility;
+the separate POCO verification below records the observed behavior. Earlier
+experiments below describe the notification as it was
+at their date, including its former Trennen action.
 This notification reports
 the connection; CO₂ alerts use the independent channel described below.
+
+### Service notification lock-screen check (2026-11-18)
+
+The main debug APK was installed on POCO as an update without uninstalling or
+clearing data. Android reported notification 4101 as FOREGROUND_SERVICE with
+vis=SECRET and no action block. With deviceLocked=1, a screenshot of the lock
+screen showed no Lüftlotse Sensor service card; unrelated notifications remained
+visible. No input or unlocking was performed through ADB.
+
+During the observed locked interval 22:46:59-22:48:16 CET (77 seconds), SQLite
+contained 16 real sensor receipts with measured_at inside that interval, from
+22:47:03.253 through 22:48:14.827 CET. The PID remained 31049; total rows increased
+from the earlier pre-lock baseline of 19,239 to 19,270. Read-only host snapshots
+used stable-file hash checks, and integrity_check returned ok. No
+SensorBleService error-level messages were found during the observed interval.
+The phone still reported deviceLocked=1 after the final snapshot. This verifies
+hidden service status and continued recording under keyguard; it does not claim
+that the display stayed powered off throughout. The separate CO2 warning code,
+channel and visibility were unchanged; no CO2 warning was induced in this check.
 
 ## Local Capacitor bridge
 
@@ -982,8 +1004,8 @@ not persisted. All latch IO runs on the alert queue, not BLE/main or SQLite queu
 Unreadable latch state fails closed and is logged, without changing measurements.
 
 The separate high-importance channel is **co2_high_v1** (CO2 warnings), notification
-ID **4102**; the ongoing Sensor connection notification remains ID **4101** with
-Trennen. App permission and the alert channel setting are checked independently.
+ID **4102**; the ongoing Sensor connection notification remains ID **4101**,
+without action buttons and with VISIBILITY_SECRET. App permission and the alert channel setting are checked independently.
 If permission is denied, no notification is attempted and no warned latch is
 consumed; a later permitted fresh high receipt may confirm the existing duration.
 A permission race or notification exception after the latch commit is logged and
