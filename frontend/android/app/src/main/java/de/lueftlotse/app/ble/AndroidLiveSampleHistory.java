@@ -45,7 +45,7 @@ final class AndroidLiveSampleHistory {
             throw new IllegalStateException("Native measurement database unavailable", error);
         }
         try (SQLiteDatabase database = SQLiteDatabase.openDatabase(
-            file.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY
+            file.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY, AndroidLiveSampleStore.PRESERVE_HISTORY
         )) {
             long snapshot = query.snapshot;
             if (query.cursor == null) {

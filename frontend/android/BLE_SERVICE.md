@@ -655,6 +655,64 @@ SQLiteOpenHelper without an additional dependency. Its database is
 it survives app restarts/updates but is excluded from backup and lost on uninstall
 or app data clearing.
 
+### Native SQLite retention policy
+
+Received measurements in `no_backup/live-samples-v1.db` are retained indefinitely.
+There is no application-defined age/TTL, maximum record count, rolling buffer,
+retention cleanup, automatic eviction or deletion of old measurements. Starting
+or reopening the app/service, reconnecting, receiving a new bootId, and updating
+the APK without clearing data do not clear history. Reading a period and the
+1-50-row history page size limit only the query/result page; they do not limit
+the number of rows kept on disk. No startup or reconnect path deletes this DB.
+
+The current schema remains version 1. Unsupported schema upgrades/downgrades
+fail instead of dropping or recreating the existing history. Future migrations
+must preserve measurements; destructive fallback is not an accepted migration.
+Both writer and read-only history opens explicitly replace Android's default
+corruption handler: the platform default can delete a corrupt database even
+when the caller only tried to read it. The native handler instead raises
+`Native history corruption detected; database files retained`, without deleting,
+replacing or truncating the database. It preserves the files for diagnosis; it
+does not repair corruption or promise that damaged data remains readable.
+
+Every insertion is transactional with insertOrThrow; failed inserts/conflicts
+roll back and preserve previously committed rows. The writer reports failures
+through Logcat (`SensorBleService`, including deviceId/bootId/sampleCounter) and
+`getState().liveStorageError`; a failure is not acknowledged as a duplicate or
+replaced with an empty database. Reader failures reject the history request.
+Storage exhaustion is an explicit write error, not a trigger to evict history.
+Only available device space and SQLite/filesystem limits constrain growth; no
+application retention quota is introduced. Uninstall, Android Clear storage,
+physical storage damage and uncommitted receipts at process death are outside
+this retention guarantee. Normal APK updates preserve the existing files.
+
+Retention audit and targeted verification (2026-11-18): no explicit age/count
+limit, startup/reconnect cleanup or destructive schema migration was found.
+The only changed runtime behavior is replacing the destructive platform-default
+corruption handler on both writer and reader opens; schema/version, recording,
+pagination, service recovery and browser IndexedDB remain unchanged. The handler
+behavior was checked against the installed Android 36 SDK source.
+
+Four LiveSampleWriter JVM tests passed. On POCO the isolated target
+`de.lueftlotse.app.sqlitetest` ran nine AndroidLiveSampleStoreTest and six
+AndroidLiveSampleHistoryTest cases. Fourteen passed initially; the corruption
+case's reader-error wording expectation was too narrow (SQLite returned its own
+explicit exception). After changing that assertion to verify the error plus
+unchanged file bytes, only that case was rebuilt/repeated and passed. All fifteen
+SQLite checks are therefore covered, including preservation of 65 old/new rows
+across reopen (beyond the 50-row page size), existing rows/IDs/timestamps after an
+injected INSERT failure and reopen, and byte-for-byte preservation of a corrupt
+file after both writer and read-only history attempts. Existing history sorting,
+period boundaries, pagination and deduplication checks passed as well.
+
+Both instrumentation suites assert the isolated target package before creating
+random direct children of its no_backup and clean up only those children. No test
+subdirectories remained after execution; unrelated pre-existing isolated-app
+files were left alone. Only isolated test APKs were updated. The main APK and
+its phone history were not updated or cleared, and this fix has not yet been
+installed into the main phone app. git diff --check passed. Test APKs/logs remain
+outside Git in the existing TEMP SQLite-test directory.
+
 The `live_samples` table stores a generated measurement UUID, deviceId, bootId,
 sampleCounter, uptimeMs, ppm, measured_at and source=`sensor`. Both uint64 fields
 are canonical decimal TEXT, never signed SQLite integers or JSON numbers.

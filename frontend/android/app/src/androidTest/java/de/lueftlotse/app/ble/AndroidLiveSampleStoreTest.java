@@ -10,8 +10,13 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import de.lueftlotse.ble.Codec;
 import de.lueftlotse.ble.UInt64;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -148,6 +153,71 @@ public class AndroidLiveSampleStoreTest {
             assertTrue(expected.getMessage().contains("conflicts"));
         }
         assertArrayEquals(original, onlyRow());
+    }
+
+    @Test public void oldHistorySurvivesReopenBeyondHistoryPageSize() {
+        for (int i = 1; i <= 64; i++) {
+            store.save(sample(ID, BigInteger.valueOf(i), BigInteger.valueOf(i), 800, i));
+        }
+        store.save(sample(ID, BigInteger.valueOf(65), BigInteger.valueOf(65), 900, 1795000000000L));
+        store.close();
+        store = new AndroidLiveSampleStore(context);
+        try (Cursor rows = store.getReadableDatabase().rawQuery(
+            "SELECT COUNT(*), MIN(measured_at), MAX(measured_at) FROM live_samples", null
+        )) {
+            assertTrue(rows.moveToFirst());
+            assertEquals(65, rows.getInt(0));
+            assertEquals(1, rows.getLong(1));
+            assertEquals(1795000000000L, rows.getLong(2));
+        }
+    }
+
+    @Test public void failedInsertPreservesExistingHistoryAfterReopen() {
+        store.save(sample(ID, BigInteger.ONE, BigInteger.TEN, 800, 1000));
+        String[] original = onlyRow();
+        store.getWritableDatabase().execSQL(
+            "CREATE TRIGGER reject_sample BEFORE INSERT ON live_samples "
+                + "BEGIN SELECT RAISE(ABORT, 'Injected write failure'); END"
+        );
+        assertThrows(SQLiteException.class, () -> store.save(
+            sample(ID, BigInteger.valueOf(2), BigInteger.valueOf(20), 900, 2000)
+        ));
+        store.close();
+        store = new AndroidLiveSampleStore(context);
+        assertArrayEquals(original, onlyRow());
+    }
+
+    @Test public void corruptDatabaseIsRetainedByWriterAndReadOnlyHistory() throws Exception {
+        store.close();
+        File file = new File(directory, AndroidLiveSampleStore.DATABASE_NAME);
+        byte[] original = new byte[4096];
+        Arrays.fill(original, (byte) 64);
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            output.write(original);
+        }
+        SQLiteException error = assertThrows(SQLiteException.class, () -> store.getWritableDatabase());
+        assertTrue(error.getMessage(), error.getMessage().contains("files retained"));
+        assertArrayEquals(original, bytes(file));
+
+        ExecutionException readError = assertThrows(ExecutionException.class, () -> AndroidLiveSampleHistory.load(
+            context, new NativeHistoryQuery("0", "3000", null, "time-desc", 50, null)
+        ).get(5, TimeUnit.SECONDS));
+        assertTrue(readError.getCause() instanceof SQLiteException);
+        assertNotNull(readError.getCause().getMessage());
+        assertArrayEquals(original, bytes(file));
+    }
+
+    private byte[] bytes(File file) throws Exception {
+        byte[] value = new byte[(int) file.length()];
+        try (FileInputStream input = new FileInputStream(file)) {
+            int offset = 0;
+            while (offset < value.length) {
+                int count = input.read(value, offset, value.length - offset);
+                assertTrue(count > 0);
+                offset += count;
+            }
+        }
+        return value;
     }
 
     @Test public void failedInsertRollsBackAndRetryIsNotMistakenForDuplicate() {

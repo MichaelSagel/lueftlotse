@@ -3,6 +3,7 @@ package de.lueftlotse.app.ble;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
+import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
@@ -12,9 +13,13 @@ import java.util.UUID;
 /** Native-only history. Construct, open, query and close exclusively on the disk queue. */
 final class AndroidLiveSampleStore extends SQLiteOpenHelper implements LiveSampleWriter.Store {
     static final String DATABASE_NAME = "live-samples-v1.db";
+    // The platform default deletes corrupt databases, including on read-only opens.
+    static final DatabaseErrorHandler PRESERVE_HISTORY = database -> {
+        throw new SQLiteException("Native history corruption detected; database files retained");
+    };
 
     AndroidLiveSampleStore(Context context) {
-        super(context.getApplicationContext(), path(context), null, 1);
+        super(context.getApplicationContext(), path(context), null, 1, PRESERVE_HISTORY);
     }
 
     private static String path(Context context) {
