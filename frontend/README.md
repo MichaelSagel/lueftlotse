@@ -46,8 +46,9 @@ the saved address, then native service-UUID-filtered scan windows with pauses.
 Every handshake verifies the saved deviceId. Trennen stops connection and search
 until the app is opened again or a downward pull resumes it; state polling cannot restart them. No generic
 picker or device list is shown.
-Process death, force-stop and OEM power management
-can still end the service; no process/boot auto-start is added. Browser reconnection
+Ordinary process death can be followed by Android sticky-service recreation
+using the saved enabled binding, without WebView. Restart timing is not guaranteed.
+Force-stop and OEM restrictions can still prevent recovery; no boot startup is added. Browser reconnection
 behavior is unchanged; a foreground service is not an unlimited-execution guarantee.
 
 ## Shared BLE session contract
@@ -166,8 +167,8 @@ The migration document explains this storage limitation and the exact rules.
 After a successful STATUS handshake (including completion of its Control write),
 the app remembers one sensor: the UUID from Info, the BLE address supplied by the
 Android adapter, and `connectionEnabled: true`. This flag records connection intent
-for retries within an already running service; it never starts a service after
-process death or phone boot without opening the app. A new visible app opening
+for retries and system recreation of the already-started sticky service after
+ordinary process death. It does not bypass force-stop or start on phone boot. A new visible app opening
 reenables automatic connection; the Android UI has no selection/forget action.
 
 Every later connection must match the saved Info UUID. A mismatch closes the

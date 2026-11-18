@@ -3,10 +3,33 @@
 `SensorBleService` owns one `GattTransport` / Java `ProtocolSession`. The service
 is started, unbound, non-exported and uses `connectedDevice`; it holds no Activity
 or WebView reference. Activity recreation or dismissal does not close its session.
-It uses `START_NOT_STICKY`, no boot receiver and no process/boot service startup.
-An already confirmed connection may reconnect within the same live service run.
-A null restart intent does not open GATT. Process death loses connection state and
-the preview cache, but committed native measurements remain on disk.
+An active logical run returns `START_STICKY`; denied/idle/stopping starts return
+`START_NOT_STICKY`. There is no boot receiver or force-stop bypass. After ordinary
+process death, Android may recreate the foreground service without Activity or
+WebView. A null Intent (or a START redelivered into empty process state) uses the
+internal `ServiceRecovery` path. It reads the native record without migration or
+mutation and requires completed migration, a saved sensor, connectionEnabled=true
+and all connection/discovery permissions. It reserves a fresh runId/ownership,
+recreates the foreground notification and uses the existing discovery, Info
+identity check, handshake and native SQLite writer. An active/reserved run is
+never duplicated. Missing/disabled records or permissions stop recovery; corrupt
+or unreadable binding is reported as an error and never overwritten.
+
+Trennen persists false before closing and stopping the service. A notification
+action delivered into a freshly recreated process also disables the saved intent
+before any recovery. System recovery never reenables false. Visible-app opening
+and pull-to-refresh retain their existing behavior and may enable it explicitly.
+Process death loses the preview, transport/timers and uncommitted writer queue;
+committed SQLite data remains. Restart timing and OEM behavior are not guaranteed;
+missing measurements are not backfilled. Force-stop still requires user action.
+
+**Hardware status: recovery after SIGKILL on POCO is not confirmed.** In the
+recorded attempts neither the main service nor the isolated control restarted.
+The cause was not established. Behavior after other forms of process termination
+(system low-memory kill, application crash or OEM process removal) was not
+established by these experiments. The implementation below must not be described
+as hardware-verified process recovery; live-service BLE reconnection is a
+separate previously tested behavior.
 
 On Android the route selects `NativeBleSession` as the only `BLE_SESSION` for the
 page, discovery and manual journal download. Attaching the first UI reader runs
@@ -25,6 +48,146 @@ remains accessible, but native calls and migration are forbidden.
 The service receives and stores LIVE_SAMPLE independently of the WebView.
 [Manual download](BLE_JOURNAL_BRIDGE.md) uses the same transport and retains
 the TypeScript atomic IndexedDB commit → ACK → matching ACK_ACCEPTED contract.
+
+## System process recovery verification (2026-11-18)
+
+55 targeted JVM tests passed: 14 ServiceRecovery, 17 BleServiceState,
+15 ServiceBindingActions and 9 ServiceDiscovery. The recovery tests cover null
+Intent/redelivered-start admission, new process/run identity, missing/unmigrated,
+empty, corrupt and unreadable bindings, revoked permissions, revocation before
+open, persisted Trennen (including notification before recovery), overlapping
+visible/system starts and concurrent reservations. UI bridge admission still
+requires a visible Activity. Java compilation and git diff --check passed.
+These are JVM checks, not hardware evidence. **Recovery after SIGKILL on POCO
+is not confirmed and is not hardware-verified.** The primary and isolated-control
+observations below do not establish either the cause or the behavior under other
+forms of process termination.
+
+First POCO hardware attempt (2026-11-18, Europe/Berlin): **FAILED recovery**.
+The already-built main debug APK was installed with adb install -r, without
+uninstall/data clearing. Before locking, native state was ready for the saved
+UUID, enabled binding revision 33 and foreground service PID 22370. The baseline
+read-only SQLite snapshot had 17879 rows and passed integrity_check.
+
+After the user confirmed locking, keyguard was verified and only the main
+process was signalled using `adb -s OZFQ4PHIE68HSWRW shell run-as
+de.lueftlotse.app kill -9 22370`. The phone-clock command interval was
+15:50:37.592-15:50:37.725 CET. Zygote/ActivityManager confirmed process death by
+signal 9 around 15:50:37.737, and ApplicationExitInfo reported SIGNALED/status 9.
+No force-stop, app-stop command, Activity launch or screen unlock was performed
+after the signal. Package state remained stopped=false. Bluetooth scan/connect,
+foreground-start and background-run app-ops were allowed; the native binding
+still had migrationComplete=true, connectionEnabled=true, revision 33 and the
+same saved identity/address. No phone settings were changed.
+
+Through 15:55:12.411 CET (274.686 seconds after the command interval), no new
+main PID, service record, SYSTEM_RECOVERY or BLE attempt was observed. A final
+stable/cold-journal SQLite copy taken while still locked contained 17898 rows;
+all 19 additional rows versus baseline had arrived BEFORE SIGKILL. There were
+zero records after the signal. The last receipt remained 15:50:36.888 CET,
+so the recording interruption was still open and at least 275.523 seconds at
+observation end. Final integrity_check was ok; no LIVE_SAMPLE storage error or
+app crash was logged during the observation. No successful restored handshake
+or recovery time can be reported. The journal does not give an explicit reason
+for the absent restart; this is not attributed to a proven OEM restriction.
+An AVC read-property denial in the kill utility did not prevent delivery of
+SIGKILL, as confirmed by the process exit record.
+
+Diagnostic logs, observer heartbeat, exit-info, package/app-ops/service/window
+snapshots, signal timestamps and read-only database copies were retained outside
+Git in TEMP/lueftlotse-sticky-poco-609n953n. The application was left stopped; it
+was not manually reopened to make recovery appear successful. No tests or builds
+were repeated for the hardware attempt.
+
+Second main-service attempt with expanded diagnostics (same installed APK):
+Immediately before SIGKILL of PID 12682, the full dumpsys showed
+`startRequested=true`, `stopIfKilled=false`, `callStart=true`, `lastStartId=1`
+and **`startCommandResult=1`**. Thus Android had accepted START_STICKY in this
+attempt; this is stronger evidence than the earlier APK bytecode inspection.
+The signal-command interval was 16:08:41.723-16:08:41.864 CET. With the screen
+locked and ESP32 on, 21 snapshots were collected, beginning about 0.062 seconds
+after the command and ending at 300.101 seconds. None showed a service record
+or new main PID. Unfiltered continuous Logcat across all buffers included the
+available ActivityManager/ActiveServices/POCO messages and the
+`am_schedule_service_restart` event tag. It recorded process death and
+`am_foreground_service_stop ... STOP_SERVICE`, but no restart scheduling,
+cancellation, SYSTEM_RECOVERY, restored handshake or BLE attempt. No restart
+delay could be established. The final read-only SQLite image contained 17953
+rows versus 17921 at baseline; all 32 additional rows preceded SIGKILL. There
+were zero measurements after the signal, last receipt 16:08:40.316 CET, and
+integrity_check remained ok. Package state was stopped=false. Diagnostics were
+retained in TEMP/lueftlotse-sticky-extended-ofd9rchd.
+
+Source audit found stopSelfResult/stopForeground paths for rejected starts,
+terminal connection cleanup after draining accepted writes, and idle service
+shutdown. WebView loss can close an unsafe active manual-journal operation;
+that path was not established as participating in either SIGKILL attempt.
+SIGKILL cannot execute callbacks in the terminated process. The system's
+STOP_SERVICE event alone does not establish an app-originated stopSelf or
+stopService call. No own-stop explanation of the observed failure was confirmed.
+
+Isolated control attempt (2026-11-18, same POCO Android 16 / OS3.0): a standalone
+TEMP-only APK, package `de.lueftlotse.app.stickyprobe`, contained a native Activity
+and an unbound foreground service with unconditional START_STICKY. It had no BLE,
+SQLite, WebView, binding/journal clients, stopSelf/stopService calls, watchdog,
+alarm or restart helper. TargetSdk 36, connectedDevice type 16, stopWithTask=false
+and the pre-kill startRequested/stopIfKilled/callStart/startCommandResult values
+matched the main service. Its normal CHANGE_NETWORK_STATE permission satisfied
+the connectedDevice prerequisite without any Bluetooth or network operations;
+the package/UID/signing key/notification channel and permission set were separate.
+It therefore controls the app subsystems, not every possible package/OS policy.
+
+After an initially rejected installation, one installation of the isolated APK
+succeeded with user confirmation. The main app and its data/settings were not
+modified. Explicit logs recorded START_RESULT=1 for PID 17750. The first lock
+check found the screen awake, so no signal was sent; after the user's renewed
+lock confirmation one SIGKILL was sent only to that isolated PID, during
+16:27:23.966-16:27:24.106 CET. Android reported SIGNALED/status 9 and stopped=false.
+Across 21 snapshots through 300.015 seconds, no service record or replacement PID
+appeared. No SERVICE_CREATE, START_RESULT/null-Intent call, SERVICE_DESTROY,
+restart scheduling or cancellation was recorded after the signal. The system
+again emitted STOP_SERVICE. The phone remained locked, and no Activity was
+opened to manufacture a successful restart. The isolated service was left stopped.
+
+| Observation | Main service, expanded attempt | Isolated control |
+| --- | --- | --- |
+| Android accepted START_STICKY | Yes, startCommandResult=1 | Yes, startCommandResult=1 and explicit log |
+| Service/new PID within five minutes | Not observed | Not observed |
+| Restart scheduled/cancelled in recorded logs | Not observed | Not observed |
+| Recovery callback/handshake | Not observed | No recovery callback; no BLE by design |
+| BLE/SQLite/WebView/own stop calls | Present with guarded stop paths | Absent |
+
+The failure can be reproduced without the Lueftlotse-specific subsystems or own
+stop calls. This does **not** identify a specific POCO power-management rule or
+prove how other FGS types, ROM configurations or process-termination methods
+behave. The missing evidence is the internal Android/POCO decision permitting or
+rejecting restart before removal/scheduling; the available logs do not expose
+that reason. No watchdog, alarm, boot startup, force-stop bypass or phone-setting
+change was added. The current implementation and its JVM tests are retained.
+Control sources/APK, full logs, timing snapshots, comparison and result JSON stay
+outside Git in TEMP/lueftlotse-sticky-control-ppfm26g8.
+
+Recorded POCO procedure (main package de.lueftlotse.app):
+
+1. Update the main debug APK with adb install -r; do not uninstall or clear data.
+2. Open the app once, confirm the saved sensor and enabled intent, and record PID,
+   logical runId and a stable read-only SQLite snapshot/count/latest receipt.
+3. Start continuous all-buffer logging including am_schedule_service_restart,
+   ActivityManager/ActiveServices and available POCO messages. Ask the user to lock
+   the screen; record phone wall time and keyguard/screen state. Keep ESP32 on.
+4. Send SIGKILL to that verified main-app PID using run-as under its own UID.
+   Do not use am force-stop, cmd activity stop-app, app clearing, reboot or a UI
+   launch after the kill. Confirm old PID disappeared. Save frequent service
+   snapshots in the first seconds and record any restart scheduling/cancellation,
+   new PID and SYSTEM_RECOVERY log/new runId; do not assume they occur.
+5. Keep the phone locked for at least five minutes. Copy only a stable/cold-journal SQLite
+   image without modifying phone files. Query the local image read-only. Count
+   new receipts strictly after process termination and inside the locked interval,
+   rather than relying on a total row increase. Check errors, identity and DB
+   integrity and report restart delay/recording gap. Confirm Activity was not opened.
+6. Persisted Trennen is covered by JVM tests; a separate hardware process-death
+   experiment after Trennen was not performed here. These attempts do not verify
+   recovery after other process-death causes, force-stop or phone boot.
 
 ## Ownership, ordering and cleanup
 
@@ -93,7 +256,7 @@ stale addresses are rejected. Each attempt repeats the regular handshake.
 
 Trennen from UI or notification disables durable connection intent, cancels the
 scan/timer and current GATT attempt, and fences late callbacks. Intent also
-persists when no sensor has ever been bound. The internal forget bridge remains available but has no Android UI action. No process/boot auto-start, SQLite migration or CO2-alert change is added.
+persists when no sensor has ever been bound. The internal forget bridge remains available but has no Android UI action. No boot auto-start, SQLite migration or CO2-alert change is added; system process recovery is described above.
 Scan permission is required (BLUETOOTH_SCAN on API 31+, fine location on older
 Android, plus background location on API 29–30). Android 11 users may need to
 select Standort / Immer zulassen in app settings; the UI explicitly reports
@@ -507,8 +670,9 @@ Activity/WebView does not own or shut down the queue. The last storage failure
 is logged and remains in `getState().liveStorageError` across subsequent reads,
 successful writes and new sessions within the process. Reading this field does
 not perform disk IO. The shared Android history UI uses the read-only reader below.
-There is no HTTP upload, automatic process/boot startup,
-automatic retry of failed receipts, retention pruning or gap recovery in this path.
+There is no HTTP upload, boot startup, automatic retry of failed receipts,
+retention pruning or gap recovery in this path. System service recreation may
+resume recording as described above.
 
 Commit is the durability boundary: process death before commit can lose an
 accepted in-memory receipt, and LIVE_SAMPLE has no durable delivery ACK/replay.

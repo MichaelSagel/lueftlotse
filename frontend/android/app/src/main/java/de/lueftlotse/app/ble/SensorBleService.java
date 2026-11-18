@@ -11,7 +11,7 @@ import de.lueftlotse.app.R;
 import de.lueftlotse.ble.*;
 import de.lueftlotse.ble.transport.*;
 
-/** Started, unbound, non-sticky service. The Activity never owns this transport. */
+/** Started, unbound foreground service. System recovery never needs an Activity. */
 public final class SensorBleService extends Service {
     static final String START = "de.lueftlotse.ble.START", DISCONNECT = "de.lueftlotse.ble.DISCONNECT";
     private static final int NOTIFICATION_ID = 4101;
@@ -52,21 +52,49 @@ public final class SensorBleService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int id) {
         BleServiceRuntime.onMain();
         startId = id; // Includes notification actions and stale intents; stop the latest service start.
-        if (intent == null) { stopIfIdle(id); return START_NOT_STICKY; }
-        String token = intent.getStringExtra("runId");
-        if (DISCONNECT.equals(intent.getAction())) {
-            try { BleServiceRuntime.bindingActions(this).disconnect(token, "Über Benachrichtigung getrennt"); }
+        String requestedToken = intent == null ? null : intent.getStringExtra("runId");
+        if (intent != null && DISCONNECT.equals(intent.getAction())) {
+            try {
+                if (BleServiceRuntime.STATE.current() == null) {
+                    // An old notification can be tapped before system recovery establishes a run.
+                    NativeBindingRepository.Snapshot saved = BleServiceRuntime.bindings(this).requireMigrated();
+                    BleServiceRuntime.bindingActions(this).disconnectSaved(saved.revision);
+                } else {
+                    BleServiceRuntime.bindingActions(this).disconnect(requestedToken, "Über Benachrichtigung getrennt");
+                }
+            }
             catch (Exception error) {
                 android.util.Log.e("SensorBleService", "Verbindungsabsicht nicht gespeichert; Verbindung geschlossen", error);
                 android.widget.Toast.makeText(this, "Verbindung getrennt. Verbindungsabsicht konnte nicht gespeichert werden.", android.widget.Toast.LENGTH_LONG).show();
             }
             stopIfIdle(id);
-            return START_NOT_STICKY;
+            return restartMode();
         }
-        if (!START.equals(intent.getAction()) || !BleServiceRuntime.STATE.matches(token)) {
-            stopIfIdle(id); return START_NOT_STICKY;
+        if (ServiceRecovery.requested(intent != null, intent != null && START.equals(intent.getAction()), BleServiceRuntime.STATE)) {
+            try {
+                BleServiceState.Run restored = ServiceRecovery.reserve(
+                    BleServiceRuntime.bindings(this), BleServiceRuntime.STATE,
+                    BleServiceRuntime.discoveryPermitted(this)
+                );
+                if (restored == null) {
+                    stopIfIdle(id);
+                    return restartMode();
+                }
+                requestedToken = restored.id;
+                android.util.Log.i("SensorBleService", "SYSTEM_RECOVERY run=" + requestedToken
+                    + " device=" + restored.expectedDeviceId);
+            } catch (java.io.IOException | RuntimeException error) {
+                BleServiceRuntime.STATE.bindingError("Dienstwiederherstellung fehlgeschlagen: " + error);
+                android.util.Log.e("SensorBleService", "System recovery rejected", error);
+                stopIfIdle(id);
+                return restartMode();
+            }
+        } else if (!START.equals(intent.getAction()) || !BleServiceRuntime.STATE.matches(requestedToken)) {
+            stopIfIdle(id);
+            return restartMode();
         }
-        if (token.equals(runId)) return START_NOT_STICKY;
+        final String token = requestedToken;
+        if (token.equals(runId)) return restartMode();
         BleServiceState.Run run = BleServiceRuntime.STATE.current();
         try {
             BleServiceRuntime.createChannel(this);
@@ -78,11 +106,11 @@ public final class SensorBleService extends Service {
             Notification notification = notification("Verbindung wird hergestellt");
             if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
             else startForeground(NOTIFICATION_ID, notification);
-            if (!BleServiceRuntime.STATE.open(token, BleServiceRuntime.permitted(this))) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id); return START_NOT_STICKY; }
+            if (!BleServiceRuntime.STATE.open(token, BleServiceRuntime.permitted(this))) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id); return restartMode(); }
             BleServiceRuntime.host = this;
             if (run.discovery) {
                 startDiscovery(token, run);
-                return START_NOT_STICKY;
+                return restartMode();
             }
             reconnect = new ServiceReconnect(new ServiceReconnect.Port() {
                 public ServiceReconnect.Timer schedule(Runnable action, long delayMs) {
@@ -115,7 +143,13 @@ public final class SensorBleService extends Service {
                 stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(id);
             }
         }
-        return START_NOT_STICKY;
+        return restartMode();
+    }
+    private int restartMode() {
+        BleServiceState.Run current = BleServiceRuntime.STATE.current();
+        return current != null && BleServiceRuntime.STATE.active() && !BleServiceRuntime.STATE.stopping(current.id)
+            ? START_STICKY
+            : START_NOT_STICKY;
     }
     private void connectAttempt(String token, String address, String expectedDeviceId) {
         BleServiceRuntime.onMain();

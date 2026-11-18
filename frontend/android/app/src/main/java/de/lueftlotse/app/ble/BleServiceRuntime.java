@@ -8,7 +8,7 @@ import android.os.*;
 import java.io.IOException;
 import java.util.Map;
 
-/** Process session state and one native binding repository. No process/boot startup. */
+/** Process session state and native binding repository. No constructor or boot startup. */
 public final class BleServiceRuntime {
     public static final BleOwnership OWNERSHIP = new BleOwnership();
     static final BleServiceState STATE = new BleServiceState(OWNERSHIP);

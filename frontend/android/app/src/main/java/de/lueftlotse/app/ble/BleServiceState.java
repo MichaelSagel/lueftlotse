@@ -45,6 +45,17 @@ public final class BleServiceState {
     }
     private Run reserve(boolean visible, boolean permitted, String address, String expected, BigInteger revision, boolean discovery) {
         if (!visible) throw new IllegalStateException("Start nur aus einer sichtbaren Activity");
+        return reservePermitted(permitted, address, expected, revision, discovery);
+    }
+    /** Internal system restart admission, never exposed through the Capacitor bridge. */
+    synchronized Run reserveSystemRecovery(NativeBindingRepository.Snapshot saved, boolean permitted) {
+        if (active() || !permitted || !saved.migrationComplete || saved.binding == null
+                || !saved.connectionEnabled || !saved.binding.connectionEnabled) {
+            return null;
+        }
+        return reservePermitted(true, saved.binding.bleAddress, saved.binding.deviceId, saved.revision, true);
+    }
+    private Run reservePermitted(boolean permitted, String address, String expected, BigInteger revision, boolean discovery) {
         if (!permitted) throw new IllegalStateException("Bluetooth- und Benachrichtigungsberechtigungen fehlen");
         if (active()) throw new IllegalStateException("Sensor-Dienst ist bereits aktiv");
         if ((address == null && !discovery) || (address != null && !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}"))) throw new IllegalArgumentException("Ungültige BLE-Adresse");
